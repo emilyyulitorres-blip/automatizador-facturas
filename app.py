@@ -2,23 +2,91 @@ import streamlit as st
 import pandas as pd
 import fitz
 import re
+import os
 from io import BytesIO
 from PIL import Image
 import pytesseract
 
-st.set_page_config(page_title="Automatizador de Facturas", layout="wide")
+st.set_page_config(
+    page_title="Automatizador de Facturas",
+    layout="wide"
+)
 
+# ---------- ESTILOS ----------
 st.markdown("""
-# ☀️ Automatizador de Facturas
+<style>
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
 
-Carga facturas PDF o imágenes, revisa los datos extraídos y genera un Excel listo para descargar.
+.header-box {
+    padding: 10px 0 25px 0;
+}
 
----
-""")
+.main-title {
+    font-size: 42px;
+    font-weight: 800;
+    color: #172B4D;
+    margin-bottom: 5px;
+}
 
+.subtitle {
+    font-size: 17px;
+    color: #344563;
+}
+
+.card {
+    padding: 24px;
+    border-radius: 16px;
+    border: 1px solid #E5E7EB;
+    background: #FFFFFF;
+    box-shadow: 0px 3px 10px rgba(0,0,0,0.05);
+}
+
+.ok {
+    color: #159947;
+    font-size: 36px;
+    font-weight: 800;
+}
+
+.warn {
+    color: #F59E0B;
+    font-size: 36px;
+    font-weight: 800;
+}
+
+.err {
+    color: #E11D48;
+    font-size: 36px;
+    font-weight: 800;
+}
+
+.section-title {
+    font-size: 26px;
+    font-weight: 700;
+    color: #172B4D;
+    margin-top: 30px;
+    margin-bottom: 15px;
+}
+
+.footer {
+    margin-top: 40px;
+    padding: 20px;
+    border-radius: 14px;
+    background: #F8FAFC;
+    color: #64748B;
+    font-size: 14px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ---------- FUNCIONES ----------
 def buscar(patron, texto):
     m = re.search(patron, texto, re.IGNORECASE)
     return m.group(1).strip() if m else ""
+
 
 def leer_pdf(file):
     texto = ""
@@ -28,17 +96,23 @@ def leer_pdf(file):
             texto += page.get_text("text") + "\n"
     return texto
 
+
 def leer_imagen(file):
     img = Image.open(file)
     return pytesseract.image_to_string(img, lang="spa")
 
+
 def tipo_documento(texto):
     t = texto.upper()
+
     if "PROFORMA" in t:
         return "NO VÁLIDA - PROFORMA"
+
     if "FACTURA" in t:
         return "FACTURA"
+
     return "REVISAR - NO IDENTIFICADO"
+
 
 def extraer(texto, archivo):
     tipo = tipo_documento(texto)
@@ -48,6 +122,7 @@ def extraer(texto, archivo):
         fecha = buscar(r"([0-9]{2}/[0-9]{2}/[0-9]{4})", texto)
 
     factura = buscar(r"([0-9]{3}-[0-9]{3}-[0-9]{9})", texto)
+
     ruc = buscar(r"R\.?U\.?C\.?[:\s]*([0-9]{13})", texto)
 
     subtotal = buscar(r"SUBTOTAL SIN IMPUESTOS\s*([0-9]+[\.,][0-9]{2})", texto)
@@ -62,8 +137,17 @@ def extraer(texto, archivo):
 
     lineas = [l.strip() for l in texto.splitlines() if l.strip()]
     proveedor = ""
+
     for linea in lineas[:15]:
-        if len(linea) > 5 and "RUC" not in linea.upper() and "FACTURA" not in linea.upper():
+        linea_mayus = linea.upper()
+        if (
+            len(linea) > 5
+            and "RUC" not in linea_mayus
+            and "FACTURA" not in linea_mayus
+            and "AUTORIZACION" not in linea_mayus
+            and "AUTORIZACIÓN" not in linea_mayus
+            and "CLAVE" not in linea_mayus
+        ):
             proveedor = linea
             break
 
@@ -86,43 +170,78 @@ def extraer(texto, archivo):
         "Observación": "" if estado == "OK" else "Documento para revisión"
     }
 
+
+def crear_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Facturas")
+    return output.getvalue()
+
+
+# ---------- ENCABEZADO ----------
+col_logo, col_title, col_button = st.columns([1.2, 5, 1.3])
+
+with col_logo:
+    if os.path.exists("logo_solarteam.png"):
+        st.image("logo_solarteam.png", width=210)
+
+with col_title:
+    st.markdown("""
+    <div class="header-box">
+        <div class="main-title">Automatizador de Facturas</div>
+        <div class="subtitle">
+            Carga facturas PDF o imágenes, revisa los datos extraídos y genera un Excel listo para descargar.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.divider()
+
+
+# ---------- CARGA ----------
+st.markdown("### 📂 Sube tus facturas")
+
 archivos = st.file_uploader(
     "Sube facturas PDF o imágenes",
     type=["pdf", "jpg", "jpeg", "png"],
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    label_visibility="collapsed"
 )
 
+
+# ---------- PROCESAMIENTO ----------
 if archivos:
     resultados = []
 
-    for archivo in archivos:
-        try:
-            nombre = archivo.name.lower()
+    with st.spinner("Procesando documentos..."):
+        for archivo in archivos:
+            try:
+                nombre = archivo.name.lower()
 
-            if nombre.endswith(".pdf"):
-                texto = leer_pdf(archivo)
-            else:
-                texto = leer_imagen(archivo)
+                if nombre.endswith(".pdf"):
+                    texto = leer_pdf(archivo)
+                else:
+                    texto = leer_imagen(archivo)
 
-            resultados.append(extraer(texto, archivo.name))
+                resultados.append(extraer(texto, archivo.name))
 
-        except Exception as e:
-            resultados.append({
-                "Estado": "ERROR",
-                "Tipo documento": "ERROR",
-                "Archivo": archivo.name,
-                "Fecha": "",
-                "Factura": "",
-                "Proveedor": "",
-                "RUC Emisor": "",
-                "Subtotal": "",
-                "IVA": "",
-                "Total": "",
-                "Proyecto": "",
-                "Consumo": "",
-                "Categoría": "",
-                "Observación": str(e)
-            })
+            except Exception as e:
+                resultados.append({
+                    "Estado": "ERROR",
+                    "Tipo documento": "ERROR",
+                    "Archivo": archivo.name,
+                    "Fecha": "",
+                    "Factura": "",
+                    "Proveedor": "",
+                    "RUC Emisor": "",
+                    "Subtotal": "",
+                    "IVA": "",
+                    "Total": "",
+                    "Proyecto": "",
+                    "Consumo": "",
+                    "Categoría": "",
+                    "Observación": str(e)
+                })
 
     df = pd.DataFrame(resultados)
 
@@ -130,29 +249,62 @@ if archivos:
     revisar = len(df[df["Estado"] == "REVISAR"])
     error = len(df[df["Estado"] == "ERROR"])
 
-    st.markdown("### 📊 Resumen del procesamiento")
+    # ---------- RESUMEN ----------
+    st.markdown('<div class="section-title">📊 Resumen del procesamiento</div>', unsafe_allow_html=True)
 
-c1, c2, c3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
 
-with c1:
-    st.success(f"✅ Facturas OK: {ok}")
+    with c1:
+        st.markdown(f"""
+        <div class="card">
+            <p>✅ Facturas OK</p>
+            <div class="ok">{ok}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with c2:
-    st.warning(f"⚠️ Para revisar: {revisar}")
+    with c2:
+        st.markdown(f"""
+        <div class="card">
+            <p>⚠️ Para revisar</p>
+            <div class="warn">{revisar}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with c3:
-    st.error(f"❌ Errores: {error}")
+    with c3:
+        st.markdown(f"""
+        <div class="card">
+            <p>❌ Errores</p>
+            <div class="err">{error}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.subheader("Revisa y corrige antes de descargar")
-    df_editado = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+    # ---------- TABLA ----------
+    st.markdown('<div class="section-title">📋 Revisa y corrige antes de descargar</div>', unsafe_allow_html=True)
 
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_editado.to_excel(writer, index=False, sheet_name="Facturas")
+    df_editado = st.data_editor(
+        df,
+        use_container_width=True,
+        num_rows="dynamic",
+        height=430
+    )
+
+    excel = crear_excel(df_editado)
 
     st.download_button(
-        "Descargar Excel",
-        data=output.getvalue(),
+        "📥 Descargar Excel",
+        data=excel,
         file_name="facturas_extraidas.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+else:
+    st.info("Carga uno o varios archivos PDF, JPG, JPEG o PNG para empezar.")
+
+
+# ---------- FOOTER ----------
+st.markdown("""
+<div class="footer">
+    <b>Solar Team</b><br>
+    Automatización inteligente para extracción de información de facturas.
+</div>
+""", unsafe_allow_html=True)
