@@ -8,8 +8,13 @@ import pytesseract
 
 st.set_page_config(page_title="Automatizador de Facturas", layout="wide")
 
-st.title("Automatizador de Facturas")
-st.write("Carga facturas PDF o imágenes para extraer datos y generar un Excel.")
+st.markdown("""
+# ☀️ Automatizador de Facturas
+
+Carga facturas PDF o imágenes, revisa los datos extraídos y genera un Excel listo para descargar.
+
+---
+""")
 
 def buscar(patron, texto):
     m = re.search(patron, texto, re.IGNORECASE)
@@ -125,10 +130,18 @@ if archivos:
     revisar = len(df[df["Estado"] == "REVISAR"])
     error = len(df[df["Estado"] == "ERROR"])
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Facturas OK", ok)
-    c2.metric("Para revisar", revisar)
-    c3.metric("Errores", error)
+    st.markdown("### 📊 Resumen del procesamiento")
+
+c1, c2, c3 = st.columns(3)
+
+with c1:
+    st.success(f"✅ Facturas OK: {ok}")
+
+with c2:
+    st.warning(f"⚠️ Para revisar: {revisar}")
+
+with c3:
+    st.error(f"❌ Errores: {error}")
 
     st.subheader("Revisa y corrige antes de descargar")
     df_editado = st.data_editor(df, use_container_width=True, num_rows="dynamic")
