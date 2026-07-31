@@ -726,7 +726,7 @@ def mostrar_encabezado() -> None:
         if logo:
             st.image(
                 str(logo),
-                width=260,
+                width=300,
             )
         else:
             st.caption("Logo no encontrado")
