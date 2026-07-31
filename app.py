@@ -718,14 +718,14 @@ def mostrar_encabezado() -> None:
         vertical_alignment="center",
     )
 
-   with col_logo:
-    if logo:
-        st.image(
-            str(logo),
-            width=170,
-        )
-    else:
-        st.caption("Logo no encontrado")
+    with col_logo:
+        if logo:
+            st.image(
+                str(logo),
+                width=170,
+            )
+        else:
+            st.caption("Logo no encontrado")
 
     with col_texto:
         st.markdown(
@@ -742,8 +742,6 @@ def mostrar_encabezado() -> None:
         )
 
     st.divider()
-
-
 def titulo_seccion(texto: str) -> None:
     st.markdown(
         f'<div class="section-title">{texto}</div>',
