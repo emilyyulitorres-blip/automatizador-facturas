@@ -11,9 +11,6 @@ import streamlit as st
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 
-# =========================================================
-# CONFIGURACIÓN GENERAL
-# =========================================================
 st.set_page_config(
     page_title="Automatizador de Facturas",
     page_icon="📄",
@@ -29,22 +26,12 @@ LOGO_CANDIDATES = [
     BASE_DIR / "logo.png",
 ]
 
-# Ruta local de Tesseract en Windows.
-# En Streamlit Cloud se instala mediante packages.txt.
 if os.name == "nt":
-    tesseract_windows = Path(
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    )
-
-    if tesseract_windows.exists():
-        pytesseract.pytesseract.tesseract_cmd = str(
-            tesseract_windows
-        )
+    ruta_tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+    if ruta_tesseract.exists():
+        pytesseract.pytesseract.tesseract_cmd = str(ruta_tesseract)
 
 
-# =========================================================
-# ESTILOS
-# =========================================================
 st.markdown(
     """
     <style>
@@ -53,7 +40,6 @@ st.markdown(
         padding-top: 1.4rem;
         padding-bottom: 2rem;
     }
-
     .main-title {
         font-size: 2.7rem;
         line-height: 1.05;
@@ -61,12 +47,10 @@ st.markdown(
         color: #172B4D;
         margin-bottom: 0.5rem;
     }
-
     .subtitle {
         font-size: 1.05rem;
         color: #475569;
     }
-
     .section-title {
         font-size: 1.55rem;
         font-weight: 750;
@@ -74,7 +58,6 @@ st.markdown(
         margin-top: 1.6rem;
         margin-bottom: 0.8rem;
     }
-
     .footer {
         margin-top: 2rem;
         padding: 20px 24px;
@@ -89,46 +72,25 @@ st.markdown(
 )
 
 
-# =========================================================
-# PATRONES GENERALES
-# =========================================================
-PATRON_FACTURA = re.compile(
-    r"\b\d{3}-\d{3}-\d{9}\b"
-)
-
-PATRON_RUC = re.compile(
-    r"\b\d{13}\b"
-)
-
+PATRON_FACTURA = re.compile(r"\b\d{3}-\d{3}-\d{9}\b")
+PATRON_RUC = re.compile(r"\b\d{13}\b")
 PATRON_FECHA = re.compile(
-    r"\b(?:"
-    r"\d{2}[/-]\d{2}[/-]\d{4}"
-    r"|"
-    r"\d{4}[/-]\d{2}[/-]\d{2}"
-    r")\b"
+    r"\b(?:\d{2}[/-]\d{2}[/-]\d{4}|\d{4}[/-]\d{2}[/-]\d{2})\b"
+)
+PATRON_MONTO = re.compile(
+    r"(?<!\d)(\d{1,3}(?:[.,]\d{3})*[.,]\d{2}|\d+[.,]\d{2})(?!\d)"
 )
 
 
-# =========================================================
-# NORMALIZACIÓN
-# =========================================================
 def normalizar(texto: str) -> str:
-    texto = unicodedata.normalize(
-        "NFKD",
-        texto or "",
-    )
-
+    texto = unicodedata.normalize("NFKD", texto or "")
     texto = "".join(
         caracter
         for caracter in texto
         if not unicodedata.combining(caracter)
     )
-
-    texto = texto.upper()
-    texto = texto.replace("\xa0", " ")
-    texto = re.sub(r"[ \t]+", " ", texto)
+    texto = texto.upper().replace("\xa0", " ")
     texto = re.sub(r"\s+", " ", texto)
-
     return texto.strip()
 
 
@@ -144,13 +106,11 @@ def monto_normalizado(valor: str) -> str:
     if not valor:
         return ""
 
-    valor = valor.replace("$", "")
-    valor = valor.replace(" ", "")
+    valor = valor.replace("$", "").replace(" ", "")
 
     if "," in valor and "." in valor:
         if valor.rfind(",") > valor.rfind("."):
-            valor = valor.replace(".", "")
-            valor = valor.replace(",", ".")
+            valor = valor.replace(".", "").replace(",", ".")
         else:
             valor = valor.replace(",", "")
     else:
@@ -158,214 +118,90 @@ def monto_normalizado(valor: str) -> str:
 
     try:
         return f"{float(valor):.2f}"
-
     except ValueError:
-        return valor
+        return ""
 
 
-# =========================================================
-# EXTRACCIÓN DE MONTOS
-# =========================================================
-def buscar_monto_en_texto(
-    texto: str,
-    patrones: list[str],
-) -> str:
-    texto_busqueda = normalizar(texto)
-
-    for patron in patrones:
-        coincidencia = re.search(
-            patron,
-            texto_busqueda,
-            re.IGNORECASE,
-        )
-
-        if coincidencia:
-            return monto_normalizado(
-                coincidencia.group(1)
-            )
-
-    return ""
-
-
-def extraer_subtotal(texto: str) -> str:
-    return buscar_monto_en_texto(
-        texto,
-        [
-            r"SUBTOTAL\s+SIN\s+IMPUESTOS\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"SUBTOTAL\s+15\s*%\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"SUBTOTAL\s+12\s*%\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"BASE\s+IMPONIBLE\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"BASE\s+GRAVADA\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"\bSUBTOTAL\b"
-            r"(?!\s+(?:NO\s+OBJETO|EXENTO|DESCUENTO))"
-            r"\s*[:$]?\s*([0-9.,]+\d{2})",
-        ],
-    )
-
-
-def extraer_iva(texto: str) -> str:
-    return buscar_monto_en_texto(
-        texto,
-        [
-            r"\bIVA\s+15\s*%\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"\bIVA\s+12\s*%\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"TOTAL\s+IVA\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"IMPUESTO\s+IVA\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"IMPUESTO\s+AL\s+VALOR\s+AGREGADO"
-            r"\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"\bIVA\b"
-            r"(?!\s+(?:CUANDO|INCLUIDO|INCLUYE))"
-            r"\s*[:$]?\s*([0-9.,]+\d{2})",
-        ],
-    )
-
-
-def extraer_total(texto: str) -> str:
-    return buscar_monto_en_texto(
-        texto,
-        [
-            r"VALOR\s+TOTAL"
-            r"(?!\s+SIN\s+SUBSIDIO)"
-            r"\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"TOTAL\s+A\s+PAGAR\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"IMPORTE\s+TOTAL\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"MONTO\s+TOTAL\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"TOTAL\s+FACTURA\s*[:$]?\s*([0-9.,]+\d{2})",
-            r"\bTOTAL\b"
-            r"(?!\s+(?:DESCUENTO|SIN\s+SUBSIDIO|NO\s+OBJETO|EXENTO))"
-            r"\s*[:$]?\s*([0-9.,]+\d{2})",
-        ],
-    )
-
-
-# =========================================================
-# TIPO DE DOCUMENTO
-# =========================================================
 def detectar_tipo(texto: str) -> str:
-    texto_normalizado = normalizar(texto)
+    n = normalizar(texto)
+    compacto = re.sub(r"[^A-Z]", "", n)
 
-    texto_compacto = re.sub(
-        r"[^A-Z]",
-        "",
-        texto_normalizado,
-    )
-
-    if (
-        "PROFORMA" in texto_normalizado
-        or "PROFORMA" in texto_compacto
-    ):
+    if "PROFORMA" in n or "PROFORMA" in compacto:
         return "NO VÁLIDA - PROFORMA"
 
-    if "COTIZACION" in texto_normalizado:
+    if "COTIZACION" in n:
         return "NO VÁLIDA - COTIZACIÓN"
 
-    if "NOTA DE CREDITO" in texto_normalizado:
+    if "NOTA DE CREDITO" in n:
         return "NO VÁLIDA - NOTA DE CRÉDITO"
 
-    if "NOTA DE VENTA" in texto_normalizado:
+    if "NOTA DE VENTA" in n:
         return "REVISAR - NOTA DE VENTA"
 
-    if (
-        "FACTURA" in texto_normalizado
-        or "FACTURA" in texto_compacto
-    ):
-        if (
-            "NUMERO DE AUTORIZACION"
-            in texto_normalizado
-            or "CLAVE DE ACCESO"
-            in texto_normalizado
-        ):
+    if "FACTURA" in n or "FACTURA" in compacto:
+        if "NUMERO DE AUTORIZACION" in n or "CLAVE DE ACCESO" in n:
             return "FACTURA ELECTRÓNICA"
-
         return "FACTURA"
 
     return "REVISAR - NO IDENTIFICADO"
 
 
-# =========================================================
-# CAMPOS PRINCIPALES
-# =========================================================
 def extraer_factura(texto: str) -> str:
     coincidencias = PATRON_FACTURA.findall(texto)
-
-    if coincidencias:
-        return coincidencias[0]
-
-    return ""
+    return coincidencias[0] if coincidencias else ""
 
 
-def extraer_fecha(
-    texto: str,
-    lineas: list[str],
-) -> str:
+def extraer_fecha(texto: str) -> str:
+    lineas = lineas_limpias(texto)
+
     for indice, linea in enumerate(lineas):
-        linea_normalizada = normalizar(linea)
+        n = normalizar(linea)
 
-        es_fecha_emision = (
-            "FECHA EMISION" in linea_normalizada
-            or "FECHA DE EMISION" in linea_normalizada
-            or linea_normalizada == "FECHA"
-            or linea_normalizada.startswith("FECHA ")
-        )
-
-        if not es_fecha_emision:
-            continue
-
-        fecha = PATRON_FECHA.search(linea)
-
-        if fecha:
-            return fecha.group(0)
-
-        for siguiente in range(
-            indice + 1,
-            min(indice + 4, len(lineas)),
+        if (
+            "FECHA EMISION" in n
+            or "FECHA DE EMISION" in n
+            or n == "FECHA"
+            or n.startswith("FECHA ")
         ):
-            fecha = PATRON_FECHA.search(
-                lineas[siguiente]
-            )
-
+            fecha = PATRON_FECHA.search(linea)
             if fecha:
                 return fecha.group(0)
 
+            for siguiente in range(indice + 1, min(indice + 4, len(lineas))):
+                fecha = PATRON_FECHA.search(lineas[siguiente])
+                if fecha:
+                    return fecha.group(0)
+
     fechas = PATRON_FECHA.findall(texto)
-
-    if fechas:
-        return fechas[-1]
-
-    return ""
+    return fechas[-1] if fechas else ""
 
 
 def extraer_ruc_emisor(texto: str) -> str:
     rucs = PATRON_RUC.findall(texto)
 
-    if not rucs:
-        return ""
-
     for ruc in rucs:
         if ruc != RUC_SOLARTEAM:
             return ruc
 
-    return rucs[0]
+    return rucs[0] if rucs else ""
 
 
 def extraer_cliente(texto: str) -> str:
-    texto_normalizado = normalizar(texto)
+    n = normalizar(texto)
 
-    if "SOLARTEAM SAS" in texto_normalizado:
+    if "SOLARTEAM SAS" in n:
         return "SOLARTEAM SAS"
 
-    if "SOLAR TEAM S.A.S" in texto_normalizado:
+    if "SOLAR TEAM S.A.S" in n:
         return "SOLAR TEAM S.A.S"
 
     return ""
 
 
-def es_linea_proveedor_valida(
-    linea: str,
-) -> bool:
-    linea_normalizada = normalizar(linea)
+def es_proveedor_valido(linea: str) -> bool:
+    n = normalizar(linea)
 
-    etiquetas_descartadas = [
+    excluir = [
         "RUC",
         "FACTURA",
         "NUMERO DE AUTORIZACION",
@@ -383,75 +219,178 @@ def es_linea_proveedor_valida(
         "SOLARTEAM",
         "SOLAR TEAM",
         "SUBTOTAL",
-        "VALOR TOTAL",
+        "TOTAL",
         "CODIGO",
         "DESCRIPCION",
         "CANTIDAD",
         "PRECIO",
     ]
 
-    tiene_etiqueta_descartada = any(
-        etiqueta in linea_normalizada
-        for etiqueta in etiquetas_descartadas
-    )
-
     return (
         len(linea.strip()) >= 7
-        and not tiene_etiqueta_descartada
+        and not any(palabra in n for palabra in excluir)
         and not PATRON_RUC.search(linea)
         and not PATRON_FACTURA.search(linea)
         and not PATRON_FECHA.search(linea)
-        and bool(
-            re.search(
-                r"[A-ZÁÉÍÓÚÑ]{3,}",
-                linea.upper(),
-            )
-        )
+        and bool(re.search(r"[A-ZÁÉÍÓÚÑ]{3,}", linea.upper()))
     )
 
 
-def extraer_proveedor(
-    lineas: list[str],
-    ruc_emisor: str,
-) -> str:
+def extraer_proveedor(texto: str, ruc_emisor: str) -> str:
+    lineas = lineas_limpias(texto)
+
     for indice, linea in enumerate(lineas):
-        if not ruc_emisor:
-            continue
-
-        if ruc_emisor not in linea:
-            continue
-
-        for siguiente in range(
-            indice + 1,
-            min(indice + 10, len(lineas)),
-        ):
-            candidato = lineas[siguiente].strip()
-
-            if es_linea_proveedor_valida(
-                candidato
-            ):
-                return candidato
+        if ruc_emisor and ruc_emisor in linea:
+            for siguiente in range(indice + 1, min(indice + 10, len(lineas))):
+                candidato = lineas[siguiente].strip()
+                if es_proveedor_valido(candidato):
+                    return candidato
 
     for linea in lineas[:45]:
-        if es_linea_proveedor_valida(linea):
+        if es_proveedor_valido(linea):
             return linea.strip()
 
     return ""
 
 
-# =========================================================
-# VALIDACIÓN
-# =========================================================
-def validar(
-    datos: dict,
-) -> tuple[str, str]:
-    if datos["Tipo documento"].startswith(
-        "NO VÁLIDA"
-    ):
-        return (
-            "REVISAR",
-            "Documento no registrable como factura",
-        )
+def extraer_monto_desde_bloques(
+    bloques: list[tuple],
+    etiquetas: list[str],
+    excluir: list[str] | None = None,
+) -> str:
+    excluir = excluir or []
+
+    for etiqueta in etiquetas:
+        etiqueta_n = normalizar(etiqueta)
+
+        for bloque in bloques:
+            texto_bloque = bloque[4] if len(bloque) > 4 else ""
+            bloque_n = normalizar(texto_bloque)
+
+            if etiqueta_n not in bloque_n:
+                continue
+
+            if any(normalizar(palabra) in bloque_n for palabra in excluir):
+                continue
+
+            montos = PATRON_MONTO.findall(texto_bloque)
+
+            if montos:
+                return monto_normalizado(montos[0])
+
+    return ""
+
+
+def buscar_monto_en_texto(
+    texto: str,
+    patrones: list[str],
+) -> str:
+    n = normalizar(texto)
+
+    for patron in patrones:
+        coincidencia = re.search(patron, n, re.IGNORECASE)
+        if coincidencia:
+            return monto_normalizado(coincidencia.group(1))
+
+    return ""
+
+
+def extraer_subtotal(texto: str, bloques: list[tuple]) -> str:
+    valor = extraer_monto_desde_bloques(
+        bloques,
+        [
+            "SUBTOTAL SIN IMPUESTOS",
+            "SUBTOTAL 15%",
+            "SUBTOTAL 12%",
+            "BASE IMPONIBLE",
+            "BASE GRAVADA",
+        ],
+        excluir=[
+            "NO OBJETO",
+            "EXENTO",
+            "DESCUENTO",
+        ],
+    )
+
+    if valor:
+        return valor
+
+    return buscar_monto_en_texto(
+        texto,
+        [
+            r"SUBTOTAL\s+SIN\s+IMPUESTOS\s*[:$]?\s*([0-9.,]+\d{2})",
+            r"SUBTOTAL\s+15\s*%\s*[:$]?\s*([0-9.,]+\d{2})",
+            r"SUBTOTAL\s+12\s*%\s*[:$]?\s*([0-9.,]+\d{2})",
+            r"BASE\s+IMPONIBLE\s*[:$]?\s*([0-9.,]+\d{2})",
+        ],
+    )
+
+
+def extraer_iva(texto: str, bloques: list[tuple]) -> str:
+    valor = extraer_monto_desde_bloques(
+        bloques,
+        [
+            "IVA 15%",
+            "IVA 12%",
+            "TOTAL IVA",
+            "IMPUESTO IVA",
+        ],
+        excluir=[
+            "SUBTOTAL",
+            "NO OBJETO",
+            "EXENTO",
+            "INCLUYE IVA",
+        ],
+    )
+
+    if valor:
+        return valor
+
+    return buscar_monto_en_texto(
+        texto,
+        [
+            r"\bIVA\s+15\s*%\s*[:$]?\s*([0-9.,]+\d{2})",
+            r"\bIVA\s+12\s*%\s*[:$]?\s*([0-9.,]+\d{2})",
+            r"TOTAL\s+IVA\s*[:$]?\s*([0-9.,]+\d{2})",
+        ],
+    )
+
+
+def extraer_total(texto: str, bloques: list[tuple]) -> str:
+    valor = extraer_monto_desde_bloques(
+        bloques,
+        [
+            "VALOR TOTAL",
+            "TOTAL A PAGAR",
+            "IMPORTE TOTAL",
+            "MONTO TOTAL",
+            "TOTAL FACTURA",
+        ],
+        excluir=[
+            "SIN SUBSIDIO",
+            "DESCUENTO",
+            "SUBTOTAL",
+            "AHORRO",
+        ],
+    )
+
+    if valor:
+        return valor
+
+    return buscar_monto_en_texto(
+        texto,
+        [
+            r"VALOR\s+TOTAL(?!\s+SIN\s+SUBSIDIO)\s*[:$]?\s*([0-9.,]+\d{2})",
+            r"TOTAL\s+A\s+PAGAR\s*[:$]?\s*([0-9.,]+\d{2})",
+            r"IMPORTE\s+TOTAL\s*[:$]?\s*([0-9.,]+\d{2})",
+            r"MONTO\s+TOTAL\s*[:$]?\s*([0-9.,]+\d{2})",
+        ],
+    )
+
+
+def validar(datos: dict) -> tuple[str, str]:
+    if datos["Tipo documento"].startswith("NO VÁLIDA"):
+        return "REVISAR", "Documento no registrable como factura"
 
     obligatorios = [
         "Fecha",
@@ -466,46 +405,31 @@ def validar(
     faltantes = [
         campo
         for campo in obligatorios
-        if not str(
-            datos.get(campo, "")
-        ).strip()
+        if not str(datos.get(campo, "")).strip()
     ]
 
     if faltantes:
-        return (
-            "REVISAR",
-            "Faltan: " + ", ".join(faltantes),
-        )
+        return "REVISAR", "Faltan: " + ", ".join(faltantes)
 
     try:
         subtotal = float(datos["Subtotal"])
         iva = float(datos["IVA"])
         total = float(datos["Total"])
 
-        diferencia = abs(
-            (subtotal + iva) - total
-        )
-
-        if diferencia > 0.10:
-            return (
-                "REVISAR",
-                "Subtotal + IVA no coincide con el total",
-            )
+        if abs((subtotal + iva) - total) > 0.10:
+            return "REVISAR", "Subtotal + IVA no coincide con el total"
 
     except ValueError:
-        return (
-            "REVISAR",
-            "Los valores monetarios requieren revisión",
-        )
+        return "REVISAR", "Los valores monetarios requieren revisión"
 
     return "OK", ""
 
 
 def extraer_datos(
     texto: str,
+    bloques: list[tuple],
     nombre_archivo: str,
 ) -> dict:
-    lineas = lineas_limpias(texto)
     tipo = detectar_tipo(texto)
     ruc_emisor = extraer_ruc_emisor(texto)
 
@@ -513,25 +437,15 @@ def extraer_datos(
         "Estado": "",
         "Tipo documento": tipo,
         "Archivo": nombre_archivo,
-        "Fecha": extraer_fecha(
-            texto,
-            lineas,
-        ),
+        "Fecha": extraer_fecha(texto),
         "Factura": extraer_factura(texto),
-        "Proveedor": extraer_proveedor(
-            lineas,
-            ruc_emisor,
-        ),
+        "Proveedor": extraer_proveedor(texto, ruc_emisor),
         "RUC Emisor": ruc_emisor,
         "Cliente": extraer_cliente(texto),
-        "RUC Cliente": (
-            RUC_SOLARTEAM
-            if RUC_SOLARTEAM in texto
-            else ""
-        ),
-        "Subtotal": extraer_subtotal(texto),
-        "IVA": extraer_iva(texto),
-        "Total": extraer_total(texto),
+        "RUC Cliente": RUC_SOLARTEAM if RUC_SOLARTEAM in texto else "",
+        "Subtotal": extraer_subtotal(texto, bloques),
+        "IVA": extraer_iva(texto, bloques),
+        "Total": extraer_total(texto, bloques),
         "Proyecto": "",
         "Consumo": "",
         "Categoría": "",
@@ -539,152 +453,82 @@ def extraer_datos(
     }
 
     estado, observacion = validar(datos)
-
     datos["Estado"] = estado
     datos["Observación"] = observacion
 
     return datos
 
 
-# =========================================================
-# OCR Y LECTURA
-# =========================================================
-def preparar_imagen(
-    imagen: Image.Image,
-) -> Image.Image:
-    imagen = ImageOps.exif_transpose(imagen)
-    imagen = imagen.convert("L")
+def preparar_imagen(imagen: Image.Image) -> Image.Image:
+    imagen = ImageOps.exif_transpose(imagen).convert("L")
     imagen = ImageOps.autocontrast(imagen)
-
-    imagen = ImageEnhance.Contrast(
-        imagen
-    ).enhance(1.8)
-
-    imagen = imagen.filter(
-        ImageFilter.SHARPEN
-    )
-
+    imagen = ImageEnhance.Contrast(imagen).enhance(1.8)
+    imagen = imagen.filter(ImageFilter.SHARPEN)
     return imagen
 
 
-def puntaje_texto_ocr(
-    texto: str,
-) -> int:
-    texto_normalizado = normalizar(texto)
-
-    palabras = [
-        "FACTURA",
-        "RUC",
-        "TOTAL",
-        "IVA",
-        "FECHA",
-        "SUBTOTAL",
-    ]
-
-    puntaje_palabras = sum(
-        texto_normalizado.count(palabra)
-        for palabra in palabras
-    )
-
-    puntaje_longitud = len(texto) // 200
-
-    return puntaje_palabras + puntaje_longitud
+def puntaje_ocr(texto: str) -> int:
+    n = normalizar(texto)
+    palabras = ["FACTURA", "RUC", "TOTAL", "IVA", "FECHA", "SUBTOTAL"]
+    return sum(n.count(palabra) for palabra in palabras) + len(texto) // 200
 
 
-def aplicar_ocr(
-    imagen: Image.Image,
-) -> str:
+def aplicar_ocr(imagen: Image.Image) -> str:
     imagen = preparar_imagen(imagen)
     resultados = []
 
     for angulo in [0, 90, 270, 180]:
-        rotada = imagen.rotate(
-            angulo,
-            expand=True,
-        )
-
+        rotada = imagen.rotate(angulo, expand=True)
         texto = pytesseract.image_to_string(
             rotada,
             lang="spa",
             config="--oem 3 --psm 6",
         )
+        resultados.append((puntaje_ocr(texto), texto))
 
-        puntaje = puntaje_texto_ocr(texto)
-
-        resultados.append(
-            (puntaje, texto)
-        )
-
-    mejor_resultado = max(
-        resultados,
-        key=lambda item: item[0],
-    )
-
-    return mejor_resultado[1]
+    return max(resultados, key=lambda resultado: resultado[0])[1]
 
 
-def leer_imagen(archivo) -> str:
-    imagen = Image.open(
-        BytesIO(
-            archivo.getvalue()
-        )
-    )
-
-    return aplicar_ocr(imagen)
+def leer_imagen(archivo) -> tuple[str, list[tuple]]:
+    imagen = Image.open(BytesIO(archivo.getvalue()))
+    texto = aplicar_ocr(imagen)
+    return texto, []
 
 
-def leer_pdf(archivo) -> str:
-    texto = ""
+def leer_pdf(archivo) -> tuple[str, list[tuple]]:
+    texto_total = ""
+    bloques_totales = []
     datos = archivo.getvalue()
 
-    with fitz.open(
-        stream=datos,
-        filetype="pdf",
-    ) as documento:
-
+    with fitz.open(stream=datos, filetype="pdf") as documento:
         for pagina in documento:
-            texto_pagina = pagina.get_text(
-                "text"
-            )
+            texto_pagina = pagina.get_text("text")
+            bloques_pagina = pagina.get_text("blocks")
 
-            texto += texto_pagina + "\n"
+            texto_total += texto_pagina + "\n"
+            bloques_totales.extend(bloques_pagina)
 
             if len(texto_pagina.strip()) < 40:
                 pixmap = pagina.get_pixmap(
-                    matrix=fitz.Matrix(
-                        2.4,
-                        2.4,
-                    ),
+                    matrix=fitz.Matrix(2.4, 2.4),
                     alpha=False,
                 )
 
                 imagen = Image.frombytes(
                     "RGB",
-                    [
-                        pixmap.width,
-                        pixmap.height,
-                    ],
+                    [pixmap.width, pixmap.height],
                     pixmap.samples,
                 )
 
-                texto += aplicar_ocr(imagen) + "\n"
+                texto_total += aplicar_ocr(imagen) + "\n"
 
-    return texto
+    return texto_total, bloques_totales
 
 
-# =========================================================
-# EXCEL
-# =========================================================
-def crear_excel(
-    df: pd.DataFrame,
-) -> bytes:
+def crear_excel(df: pd.DataFrame) -> bytes:
     salida = BytesIO()
 
-    with pd.ExcelWriter(
-        salida,
-        engine="openpyxl",
-    ) as writer:
-
+    with pd.ExcelWriter(salida, engine="openpyxl") as writer:
         df.to_excel(
             writer,
             index=False,
@@ -692,18 +536,13 @@ def crear_excel(
         )
 
         hoja = writer.sheets["Facturas"]
-
         hoja.freeze_panes = "A2"
         hoja.auto_filter.ref = hoja.dimensions
 
         for columna in hoja.columns:
             ancho = min(
                 max(
-                    len(
-                        str(
-                            celda.value or ""
-                        )
-                    )
+                    len(str(celda.value or ""))
                     for celda in columna
                 ) + 2,
                 45,
@@ -716,9 +555,6 @@ def crear_excel(
     return salida.getvalue()
 
 
-# =========================================================
-# ENCABEZADO
-# =========================================================
 col_logo, col_titulo = st.columns(
     [1.25, 5.75],
     vertical_alignment="center",
@@ -742,19 +578,14 @@ with col_logo:
 
 with col_titulo:
     st.markdown(
-        """
-        <div class="main-title">
-            Automatizador de Facturas
-        </div>
-        """,
+        '<div class="main-title">Automatizador de Facturas</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown(
         """
         <div class="subtitle">
-            Carga facturas PDF o imágenes,
-            revisa la información extraída
+            Carga facturas PDF o imágenes, revisa la información extraída
             y genera un Excel listo para descargar.
         </div>
         """,
@@ -764,53 +595,34 @@ with col_titulo:
 st.divider()
 
 st.markdown(
-    """
-    <div class="section-title">
-        📂 Sube tus facturas
-    </div>
-    """,
+    '<div class="section-title">📂 Sube tus facturas</div>',
     unsafe_allow_html=True,
 )
 
-
-# =========================================================
-# CARGA Y PROCESAMIENTO
-# =========================================================
 archivos = st.file_uploader(
     "Sube facturas PDF o imágenes",
-    type=[
-        "pdf",
-        "jpg",
-        "jpeg",
-        "png",
-    ],
+    type=["pdf", "jpg", "jpeg", "png"],
     accept_multiple_files=True,
     label_visibility="collapsed",
 )
 
 if archivos:
     resultados = []
+    barra = st.progress(0, text="Preparando documentos...")
 
-    barra = st.progress(
-        0,
-        text="Preparando documentos...",
-    )
-
-    for indice, archivo in enumerate(
-        archivos,
-        start=1,
-    ):
+    for indice, archivo in enumerate(archivos, start=1):
         try:
             nombre = archivo.name.lower()
 
             if nombre.endswith(".pdf"):
-                texto = leer_pdf(archivo)
+                texto, bloques = leer_pdf(archivo)
             else:
-                texto = leer_imagen(archivo)
+                texto, bloques = leer_imagen(archivo)
 
             resultados.append(
                 extraer_datos(
                     texto,
+                    bloques,
                     archivo.name,
                 )
             )
@@ -840,8 +652,8 @@ if archivos:
         barra.progress(
             indice / len(archivos),
             text=(
-                f"Procesando {indice} "
-                f"de {len(archivos)} documentos..."
+                f"Procesando {indice} de "
+                f"{len(archivos)} documentos..."
             ),
         )
 
@@ -849,55 +661,28 @@ if archivos:
 
     df = pd.DataFrame(resultados)
 
-    cantidad_ok = int(
-        (df["Estado"] == "OK").sum()
-    )
-
-    cantidad_revisar = int(
-        (df["Estado"] == "REVISAR").sum()
-    )
-
-    cantidad_error = int(
-        (df["Estado"] == "ERROR").sum()
-    )
+    cantidad_ok = int((df["Estado"] == "OK").sum())
+    cantidad_revisar = int((df["Estado"] == "REVISAR").sum())
+    cantidad_error = int((df["Estado"] == "ERROR").sum())
 
     st.markdown(
-        """
-        <div class="section-title">
-            📊 Resumen del procesamiento
-        </div>
-        """,
+        '<div class="section-title">📊 Resumen del procesamiento</div>',
         unsafe_allow_html=True,
     )
 
-    columna_ok, columna_revisar, columna_error = st.columns(
-        3
-    )
+    columna_ok, columna_revisar, columna_error = st.columns(3)
 
     with columna_ok:
-        st.metric(
-            label="✅ Facturas OK",
-            value=cantidad_ok,
-        )
+        st.metric("✅ Facturas OK", cantidad_ok)
 
     with columna_revisar:
-        st.metric(
-            label="⚠️ Para revisar",
-            value=cantidad_revisar,
-        )
+        st.metric("⚠️ Para revisar", cantidad_revisar)
 
     with columna_error:
-        st.metric(
-            label="❌ Errores",
-            value=cantidad_error,
-        )
+        st.metric("❌ Errores", cantidad_error)
 
     st.markdown(
-        """
-        <div class="section-title">
-            📋 Revisa y corrige antes de descargar
-        </div>
-        """,
+        '<div class="section-title">📋 Revisa y corrige antes de descargar</div>',
         unsafe_allow_html=True,
     )
 
@@ -906,60 +691,8 @@ if archivos:
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
-        height=min(
-            620,
-            130 + len(df) * 40,
-        ),
-        disabled=[
-            "Archivo",
-        ],
-        column_config={
-            "Estado": st.column_config.SelectboxColumn(
-                "Estado",
-                options=[
-                    "OK",
-                    "REVISAR",
-                    "ERROR",
-                ],
-                width="small",
-            ),
-            "Tipo documento": st.column_config.TextColumn(
-                width="medium",
-            ),
-            "Archivo": st.column_config.TextColumn(
-                width="large",
-            ),
-            "Fecha": st.column_config.TextColumn(
-                width="small",
-            ),
-            "Factura": st.column_config.TextColumn(
-                width="medium",
-            ),
-            "Proveedor": st.column_config.TextColumn(
-                width="large",
-            ),
-            "RUC Emisor": st.column_config.TextColumn(
-                width="medium",
-            ),
-            "Cliente": st.column_config.TextColumn(
-                width="medium",
-            ),
-            "RUC Cliente": st.column_config.TextColumn(
-                width="medium",
-            ),
-            "Subtotal": st.column_config.TextColumn(
-                width="small",
-            ),
-            "IVA": st.column_config.TextColumn(
-                width="small",
-            ),
-            "Total": st.column_config.TextColumn(
-                width="small",
-            ),
-            "Observación": st.column_config.TextColumn(
-                width="large",
-            ),
-        },
+        height=min(620, 130 + len(df) * 40),
+        disabled=["Archivo"],
     )
 
     st.download_button(
@@ -977,10 +710,6 @@ else:
         "Carga uno o varios archivos PDF, JPG, JPEG o PNG para comenzar."
     )
 
-
-# =========================================================
-# PIE DE PÁGINA
-# =========================================================
 st.markdown(
     """
     <div class="footer">
