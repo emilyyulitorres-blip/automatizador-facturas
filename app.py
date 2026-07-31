@@ -708,31 +708,35 @@ def aplicar_estilos() -> None:
 
 
 def mostrar_encabezado() -> None:
-    logo = next((ruta for ruta in LOGO_CANDIDATES if ruta.exists()), None)
+    logo = next(
+        (
+            ruta
+            for ruta in LOGO_CANDIDATES
+            if ruta.exists()
+        ),
+        None,
+    )
 
-    col_logo, col_texto = st.columns([1.4, 5.6], vertical_alignment="center")
+    col_logo, col_texto = st.columns(
+        [1.6, 5.4],
+        vertical_alignment="center",
+    )
 
     with col_logo:
         if logo:
-            # Streamlit nativo: evita que el HTML se muestre como texto.
-            col_logo, col_texto = st.columns([1.2, 3])
-
-with col_logo:
-    st.image(str(logo_path), width=300)
-
-with col_texto:
-    st.markdown("<h1>Automatizador de Facturas</h1>", unsafe_allow_html=True)
-    st.markdown(
-        "Carga facturas PDF o imágenes, revisa la información extraída y genera un Excel listo para descargar."
-    )
+            st.image(
+                str(logo),
+                width=260,
+            )
         else:
             st.caption("Logo no encontrado")
 
     with col_texto:
         st.title("Automatizador de Facturas")
+
         st.caption(
-            "Carga facturas PDF o imágenes, revisa la información extraída "
-            "y genera un Excel listo para descargar."
+            "Carga facturas PDF o imágenes, revisa la información "
+            "extraída y genera un Excel listo para descargar."
         )
 
     st.divider()
