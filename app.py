@@ -716,7 +716,7 @@ def mostrar_encabezado() -> None:
     with col_logo:
         if logo:
             # Streamlit nativo: evita que el HTML se muestre como texto.
-            st.image(str(logo), width=220)
+            st.image(str(logo), width=180)
         else:
             st.caption("Logo no encontrado")
 
