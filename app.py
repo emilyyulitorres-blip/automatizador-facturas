@@ -1,8 +1,6 @@
-
 import os
 import re
 import unicodedata
-from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -10,16 +8,9 @@ import fitz
 import pandas as pd
 import pytesseract
 import streamlit as st
-from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.worksheet.table import Table, TableStyleInfo
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
-from supabase import Client, create_client
 
 
-# =========================================================
-# CONFIGURACIÓN
-# =========================================================
 st.set_page_config(
     page_title="Automatizador de Facturas",
     page_icon="📄",
@@ -30,9 +21,9 @@ BASE_DIR = Path(__file__).resolve().parent
 RUC_SOLARTEAM = "1793069479001"
 
 LOGO_CANDIDATES = [
-    BASE_DIR / "logo.png",
     BASE_DIR / "logo_solarteam.png",
     BASE_DIR / "LOGO SOLAR TEAM.png",
+    BASE_DIR / "logo.png",
 ]
 
 if os.name == "nt":
@@ -41,317 +32,39 @@ if os.name == "nt":
         pytesseract.pytesseract.tesseract_cmd = str(ruta_tesseract)
 
 
-# =========================================================
-# CONEXIÓN A SUPABASE
-# =========================================================
-@st.cache_resource
-def obtener_supabase() -> Client | None:
-    try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        return create_client(url, key)
-    except Exception:
-        return None
-
-
-def cargar_proyectos(cliente: Client | None) -> list[dict]:
-    if cliente is None:
-        return []
-
-    try:
-        respuesta = (
-            cliente.table("proyectos")
-            .select("id,nombre")
-            .eq("estado", "Activo")
-            .order("nombre")
-            .execute()
-        )
-        return respuesta.data or []
-    except Exception:
-        return []
-
-
-def obtener_o_crear_proyecto(
-    cliente: Client,
-    nombre_proyecto: str,
-) -> int | None:
-    nombre_limpio = re.sub(
-        r"\s+",
-        " ",
-        str(nombre_proyecto or "").strip(),
-    )
-
-    if not nombre_limpio:
-        return None
-
-    try:
-        respuesta = (
-            cliente.table("proyectos")
-            .select("id,nombre")
-            .ilike("nombre", nombre_limpio)
-            .limit(1)
-            .execute()
-        )
-
-        if respuesta.data:
-            return int(respuesta.data[0]["id"])
-
-        nueva_respuesta = (
-            cliente.table("proyectos")
-            .insert({
-                "nombre": nombre_limpio,
-                "estado": "Activo",
-            })
-            .execute()
-        )
-
-        if nueva_respuesta.data:
-            return int(nueva_respuesta.data[0]["id"])
-
-    except Exception:
-        return None
-
-    return None
-
-
-def cargar_memoria(cliente: Client | None) -> dict:
-    """
-    Recupera las correcciones más recientes por RUC y campo.
-    Solo aplica automáticamente campos estables:
-    Proveedor, Categoría y Consumo.
-    """
-    if cliente is None:
-        return {}
-
-    try:
-        respuesta = (
-            cliente.table("correcciones")
-            .select("id,ruc_emisor,campo,valor_corregido")
-            .order("id", desc=True)
-            .limit(1000)
-            .execute()
-        )
-
-        memoria = {}
-        for fila in respuesta.data or []:
-            clave = (
-                str(fila.get("ruc_emisor") or "").strip(),
-                str(fila.get("campo") or "").strip(),
-            )
-            if clave not in memoria:
-                memoria[clave] = str(
-                    fila.get("valor_corregido") or ""
-                ).strip()
-
-        return memoria
-
-    except Exception:
-        return {}
-
-
-def aplicar_memoria(datos: dict, memoria: dict) -> dict:
-    ruc = str(datos.get("RUC Emisor") or "").strip()
-
-    for campo in ["Proveedor", "Categoría", "Consumo"]:
-        valor_guardado = memoria.get((ruc, campo))
-        if valor_guardado:
-            datos[campo] = valor_guardado
-
-    return datos
-
-
-def convertir_fecha_bd(valor) -> str | None:
-    texto = str(valor or "").strip()
-
-    if not texto:
-        return None
-
-    for formato in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(texto, formato).date().isoformat()
-        except ValueError:
-            continue
-
-    return None
-
-
-def numero_o_none(valor):
-    texto = str(valor or "").strip()
-
-    if not texto:
-        return None
-
-    try:
-        return float(texto.replace(",", "."))
-    except ValueError:
-        return None
-
-
-def guardar_en_supabase(
-    cliente: Client,
-    df_original: pd.DataFrame,
-    df_editado: pd.DataFrame,
-) -> tuple[int, int, list[str]]:
-    guardadas = 0
-    duplicadas = 0
-    errores = []
-
-    for indice, fila in df_editado.iterrows():
-        proyecto_nombre = re.sub(
-            r"\s+",
-            " ",
-            str(fila.get("Proyecto") or "").strip(),
-        )
-
-        proyecto_id = None
-
-        if proyecto_nombre:
-            proyecto_id = obtener_o_crear_proyecto(
-                cliente,
-                proyecto_nombre,
-            )
-
-            if not proyecto_id:
-                errores.append(
-                    f"{fila.get('Archivo', 'Documento')}: "
-                    "no se pudo crear o encontrar el proyecto."
-                )
-                continue
-
-        registro = {
-            "fecha": convertir_fecha_bd(fila.get("Fecha")),
-            "numero_factura": str(fila.get("Factura") or "").strip(),
-            "proveedor": str(fila.get("Proveedor") or "").strip(),
-            "ruc_emisor": str(fila.get("RUC Emisor") or "").strip(),
-            "cliente": str(fila.get("Cliente") or "").strip(),
-            "ruc_cliente": str(fila.get("RUC Cliente") or "").strip(),
-            "subtotal": numero_o_none(fila.get("Subtotal")),
-            "iva": numero_o_none(fila.get("IVA")),
-            "total": numero_o_none(fila.get("Total")),
-            "proyecto_id": proyecto_id,
-            "consumo": str(fila.get("Consumo") or "").strip(),
-            "categoria": str(fila.get("Categoría") or "").strip(),
-            "archivo": str(fila.get("Archivo") or "").strip(),
-            "estado": str(fila.get("Estado") or "").strip(),
-            "observacion": str(fila.get("Observación") or "").strip(),
-            "confianza": int(fila.get("Confianza") or 0),
-        }
-
-        if not registro["numero_factura"] or not registro["ruc_emisor"]:
-            errores.append(
-                f"{registro['archivo']}: falta factura o RUC emisor."
-            )
-            continue
-
-        try:
-            cliente.table("facturas").insert(registro).execute()
-            guardadas += 1
-        except Exception as error:
-            mensaje = str(error).lower()
-            if "duplicate" in mensaje or "unique" in mensaje or "23505" in mensaje:
-                duplicadas += 1
-            else:
-                errores.append(f"{registro['archivo']}: {error}")
-                continue
-
-        if indice not in df_original.index:
-            continue
-
-        original = df_original.loc[indice]
-        ruc = registro["ruc_emisor"]
-
-        for campo in ["Proveedor", "Categoría", "Consumo"]:
-            detectado = str(original.get(campo) or "").strip()
-            corregido = str(fila.get(campo) or "").strip()
-
-            if corregido and corregido != detectado:
-                correccion = {
-                    "ruc_emisor": ruc,
-                    "campo": campo,
-                    "valor_detectado": detectado,
-                    "valor_corregido": corregido,
-                }
-
-                try:
-                    cliente.table("correcciones").insert(correccion).execute()
-                except Exception:
-                    pass
-
-    return guardadas, duplicadas, errores
-
-
-# =========================================================
-# ESTILOS
-# =========================================================
 st.markdown(
     """
     <style>
     .block-container {
         max-width: 1550px;
-        padding-top: 1.2rem;
+        padding-top: 1.4rem;
         padding-bottom: 2rem;
     }
-
     .main-title {
-        font-size: 2.65rem;
+        font-size: 2.7rem;
         line-height: 1.05;
         font-weight: 800;
         color: #172B4D;
-        margin-bottom: 0.45rem;
+        margin-bottom: 0.5rem;
     }
-
     .subtitle {
-        font-size: 1.02rem;
+        font-size: 1.05rem;
         color: #475569;
     }
-
     .section-title {
-        font-size: 1.5rem;
+        font-size: 1.55rem;
         font-weight: 750;
         color: #172B4D;
-        margin-top: 1.5rem;
+        margin-top: 1.6rem;
         margin-bottom: 0.8rem;
     }
-
-    .summary-card {
-        border: 1px solid #E2E8F0;
-        border-radius: 16px;
-        padding: 18px 22px;
-        min-height: 115px;
-        background: #FFFFFF;
-        box-shadow: 0 3px 12px rgba(15, 23, 42, 0.05);
-    }
-
-    .summary-label {
-        font-size: 0.95rem;
-        color: #475569;
-        margin-bottom: 12px;
-    }
-
-    .summary-value {
-        font-size: 2rem;
-        font-weight: 800;
-    }
-
-    .ok-value { color: #16A34A; }
-    .review-value { color: #F59E0B; }
-    .error-value { color: #E11D48; }
-    .total-value { color: #172B4D; }
-
     .footer {
         margin-top: 2rem;
-        padding: 18px 22px;
+        padding: 20px 24px;
         border-radius: 14px;
         background: #F8FAFC;
         color: #64748B;
         font-size: 0.9rem;
-    }
-
-    [data-testid="stFileUploader"] {
-        border: 1px dashed #94A3B8;
-        border-radius: 14px;
-        padding: 0.4rem;
-        background: #F8FAFC;
     }
     </style>
     """,
@@ -359,9 +72,6 @@ st.markdown(
 )
 
 
-# =========================================================
-# PATRONES
-# =========================================================
 PATRON_FACTURA = re.compile(r"\b\d{3}-\d{3}-\d{9}\b")
 PATRON_RUC = re.compile(r"\b\d{13}\b")
 PATRON_FECHA = re.compile(
@@ -372,9 +82,6 @@ PATRON_MONTO = re.compile(
 )
 
 
-# =========================================================
-# UTILIDADES
-# =========================================================
 def normalizar(texto: str) -> str:
     texto = unicodedata.normalize("NFKD", texto or "")
     texto = "".join(
@@ -415,17 +122,6 @@ def monto_normalizado(valor: str) -> str:
         return ""
 
 
-def es_monto_valido(valor: str) -> bool:
-    try:
-        float(valor)
-        return True
-    except (TypeError, ValueError):
-        return False
-
-
-# =========================================================
-# IDENTIFICACIÓN DEL DOCUMENTO
-# =========================================================
 def detectar_tipo(texto: str) -> str:
     n = normalizar(texto)
     compacto = re.sub(r"[^A-Z]", "", n)
@@ -506,11 +202,28 @@ def es_proveedor_valido(linea: str) -> bool:
     n = normalizar(linea)
 
     excluir = [
-        "RUC", "FACTURA", "NUMERO DE AUTORIZACION", "CLAVE DE ACCESO",
-        "FECHA", "AMBIENTE", "EMISION", "PRODUCCION", "NORMAL",
-        "DIRECCION", "OBLIGADO", "CONTRIBUYENTE", "RAZON SOCIAL",
-        "IDENTIFICACION", "SOLARTEAM", "SOLAR TEAM", "SUBTOTAL",
-        "TOTAL", "CODIGO", "DESCRIPCION", "CANTIDAD", "PRECIO",
+        "RUC",
+        "FACTURA",
+        "NUMERO DE AUTORIZACION",
+        "CLAVE DE ACCESO",
+        "FECHA",
+        "AMBIENTE",
+        "EMISION",
+        "PRODUCCION",
+        "NORMAL",
+        "DIRECCION",
+        "OBLIGADO",
+        "CONTRIBUYENTE",
+        "RAZON SOCIAL",
+        "IDENTIFICACION",
+        "SOLARTEAM",
+        "SOLAR TEAM",
+        "SUBTOTAL",
+        "TOTAL",
+        "CODIGO",
+        "DESCRIPCION",
+        "CANTIDAD",
+        "PRECIO",
     ]
 
     return (
@@ -540,9 +253,6 @@ def extraer_proveedor(texto: str, ruc_emisor: str) -> str:
     return ""
 
 
-# =========================================================
-# EXTRACCIÓN DE MONTOS
-# =========================================================
 def extraer_monto_desde_bloques(
     bloques: list[tuple],
     etiquetas: list[str],
@@ -571,7 +281,10 @@ def extraer_monto_desde_bloques(
     return ""
 
 
-def buscar_monto_en_texto(texto: str, patrones: list[str]) -> str:
+def buscar_monto_en_texto(
+    texto: str,
+    patrones: list[str],
+) -> str:
     n = normalizar(texto)
 
     for patron in patrones:
@@ -592,7 +305,11 @@ def extraer_subtotal(texto: str, bloques: list[tuple]) -> str:
             "BASE IMPONIBLE",
             "BASE GRAVADA",
         ],
-        excluir=["NO OBJETO", "EXENTO", "DESCUENTO"],
+        excluir=[
+            "NO OBJETO",
+            "EXENTO",
+            "DESCUENTO",
+        ],
     )
 
     if valor:
@@ -612,8 +329,18 @@ def extraer_subtotal(texto: str, bloques: list[tuple]) -> str:
 def extraer_iva(texto: str, bloques: list[tuple]) -> str:
     valor = extraer_monto_desde_bloques(
         bloques,
-        ["IVA 15%", "IVA 12%", "TOTAL IVA", "IMPUESTO IVA"],
-        excluir=["SUBTOTAL", "NO OBJETO", "EXENTO", "INCLUYE IVA"],
+        [
+            "IVA 15%",
+            "IVA 12%",
+            "TOTAL IVA",
+            "IMPUESTO IVA",
+        ],
+        excluir=[
+            "SUBTOTAL",
+            "NO OBJETO",
+            "EXENTO",
+            "INCLUYE IVA",
+        ],
     )
 
     if valor:
@@ -639,7 +366,12 @@ def extraer_total(texto: str, bloques: list[tuple]) -> str:
             "MONTO TOTAL",
             "TOTAL FACTURA",
         ],
-        excluir=["SIN SUBSIDIO", "DESCUENTO", "SUBTOTAL", "AHORRO"],
+        excluir=[
+            "SIN SUBSIDIO",
+            "DESCUENTO",
+            "SUBTOTAL",
+            "AHORRO",
+        ],
     )
 
     if valor:
@@ -656,39 +388,18 @@ def extraer_total(texto: str, bloques: list[tuple]) -> str:
     )
 
 
-# =========================================================
-# VALIDACIÓN, CONFIANZA Y DUPLICADOS
-# =========================================================
-def calcular_confianza(datos: dict) -> int:
-    campos = [
-        "Fecha", "Factura", "Proveedor", "RUC Emisor",
-        "Subtotal", "IVA", "Total",
-    ]
-
-    completos = sum(
-        1
-        for campo in campos
-        if str(datos.get(campo, "")).strip()
-    )
-
-    confianza = int((completos / len(campos)) * 100)
-
-    if datos["Tipo documento"].startswith("NO VÁLIDA"):
-        confianza = min(confianza, 40)
-
-    if datos.get("Observación"):
-        confianza = max(0, confianza - 10)
-
-    return confianza
-
-
 def validar(datos: dict) -> tuple[str, str]:
     if datos["Tipo documento"].startswith("NO VÁLIDA"):
         return "REVISAR", "Documento no registrable como factura"
 
     obligatorios = [
-        "Fecha", "Factura", "Proveedor", "RUC Emisor",
-        "Subtotal", "IVA", "Total",
+        "Fecha",
+        "Factura",
+        "Proveedor",
+        "RUC Emisor",
+        "Subtotal",
+        "IVA",
+        "Total",
     ]
 
     faltantes = [
@@ -699,9 +410,6 @@ def validar(datos: dict) -> tuple[str, str]:
 
     if faltantes:
         return "REVISAR", "Faltan: " + ", ".join(faltantes)
-
-    if len(datos["RUC Emisor"]) != 13:
-        return "REVISAR", "RUC emisor inválido"
 
     try:
         subtotal = float(datos["Subtotal"])
@@ -727,7 +435,6 @@ def extraer_datos(
 
     datos = {
         "Estado": "",
-        "Confianza": 0,
         "Tipo documento": tipo,
         "Archivo": nombre_archivo,
         "Fecha": extraer_fecha(texto),
@@ -748,38 +455,10 @@ def extraer_datos(
     estado, observacion = validar(datos)
     datos["Estado"] = estado
     datos["Observación"] = observacion
-    datos["Confianza"] = calcular_confianza(datos)
 
     return datos
 
 
-def marcar_duplicados(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or "Factura" not in df.columns:
-        return df
-
-    duplicados = (
-        df["Factura"].astype(str).str.strip().ne("")
-        & df["Factura"].astype(str).duplicated(keep=False)
-    )
-
-    for indice in df.index[duplicados]:
-        df.at[indice, "Estado"] = "REVISAR"
-        observacion = str(df.at[indice, "Observación"] or "").strip()
-        mensaje = "Factura duplicada en la carga"
-        df.at[indice, "Observación"] = (
-            f"{observacion}; {mensaje}".strip("; ")
-        )
-        df.at[indice, "Confianza"] = min(
-            int(df.at[indice, "Confianza"]),
-            70,
-        )
-
-    return df
-
-
-# =========================================================
-# OCR Y LECTURA
-# =========================================================
 def preparar_imagen(imagen: Image.Image) -> Image.Image:
     imagen = ImageOps.exif_transpose(imagen).convert("L")
     imagen = ImageOps.autocontrast(imagen)
@@ -846,32 +525,6 @@ def leer_pdf(archivo) -> tuple[str, list[tuple]]:
     return texto_total, bloques_totales
 
 
-def vista_previa_archivo(archivo):
-    nombre = archivo.name.lower()
-
-    if nombre.endswith((".jpg", ".jpeg", ".png")):
-        imagen = Image.open(BytesIO(archivo.getvalue()))
-        st.image(imagen, use_container_width=True)
-        return
-
-    if nombre.endswith(".pdf"):
-        with fitz.open(stream=archivo.getvalue(), filetype="pdf") as documento:
-            pagina = documento[0]
-            pixmap = pagina.get_pixmap(
-                matrix=fitz.Matrix(1.4, 1.4),
-                alpha=False,
-            )
-            imagen = Image.frombytes(
-                "RGB",
-                [pixmap.width, pixmap.height],
-                pixmap.samples,
-            )
-            st.image(imagen, use_container_width=True)
-
-
-# =========================================================
-# EXCEL PROFESIONAL
-# =========================================================
 def crear_excel(df: pd.DataFrame) -> bytes:
     salida = BytesIO()
 
@@ -882,110 +535,53 @@ def crear_excel(df: pd.DataFrame) -> bytes:
             sheet_name="Facturas",
         )
 
-    salida.seek(0)
-    libro = load_workbook(salida)
-    hoja = libro["Facturas"]
+        hoja = writer.sheets["Facturas"]
+        hoja.freeze_panes = "A2"
+        hoja.auto_filter.ref = hoja.dimensions
 
-    color_azul = "172B4D"
-    color_verde = "1F9D68"
+        for columna in hoja.columns:
+            ancho = min(
+                max(
+                    len(str(celda.value or ""))
+                    for celda in columna
+                ) + 2,
+                45,
+            )
 
-    for celda in hoja[1]:
-        celda.fill = PatternFill(
-            fill_type="solid",
-            fgColor=color_azul,
-        )
-        celda.font = Font(
-            color="FFFFFF",
-            bold=True,
-        )
-        celda.alignment = Alignment(
-            horizontal="center",
-            vertical="center",
-        )
+            hoja.column_dimensions[
+                columna[0].column_letter
+            ].width = ancho
 
-    hoja.freeze_panes = "A2"
-    hoja.auto_filter.ref = hoja.dimensions
-    hoja.row_dimensions[1].height = 24
-
-    for columna in hoja.columns:
-        ancho = min(
-            max(len(str(celda.value or "")) for celda in columna) + 2,
-            45,
-        )
-        hoja.column_dimensions[columna[0].column_letter].width = ancho
-
-    if hoja.max_row >= 2 and hoja.max_column >= 1:
-        referencia = f"A1:{hoja.cell(hoja.max_row, hoja.max_column).coordinate}"
-        tabla = Table(
-            displayName="TablaFacturas",
-            ref=referencia,
-        )
-        estilo = TableStyleInfo(
-            name="TableStyleMedium2",
-            showFirstColumn=False,
-            showLastColumn=False,
-            showRowStripes=True,
-            showColumnStripes=False,
-        )
-        tabla.tableStyleInfo = estilo
-        hoja.add_table(tabla)
-
-    salida_final = BytesIO()
-    libro.save(salida_final)
-    return salida_final.getvalue()
+    return salida.getvalue()
 
 
-# =========================================================
-# DATOS COMPARTIDOS
-# =========================================================
-supabase = obtener_supabase()
-proyectos = cargar_proyectos(supabase)
-proyectos_por_nombre = {
-    proyecto["nombre"]: proyecto["id"]
-    for proyecto in proyectos
-}
-nombres_proyectos = list(proyectos_por_nombre.keys())
-memoria_correcciones = cargar_memoria(supabase)
-
-if supabase is None:
-    st.warning(
-        "La app funciona para extraer y descargar Excel, "
-        "pero no pudo conectarse a Supabase."
-    )
-elif not nombres_proyectos:
-    st.info(
-        "Todavía no hay proyectos registrados. Puedes escribir un nombre "
-        "nuevo en la columna Proyecto o dejarla vacía."
-    )
-
-
-# =========================================================
-# ENCABEZADO
-# =========================================================
 col_logo, col_titulo = st.columns(
-    [2.0, 5.0],
+    [1.25, 5.75],
     vertical_alignment="center",
 )
 
 with col_logo:
     logo = next(
-        (ruta for ruta in LOGO_CANDIDATES if ruta.exists()),
+        (
+            ruta
+            for ruta in LOGO_CANDIDATES
+            if ruta.exists()
+        ),
         None,
     )
 
     if logo:
         st.image(
             str(logo),
-            width=300,
+            use_container_width=True,
         )
-    else:
-        st.caption("Logo no encontrado")
 
 with col_titulo:
     st.markdown(
         '<div class="main-title">Automatizador de Facturas</div>',
         unsafe_allow_html=True,
     )
+
     st.markdown(
         """
         <div class="subtitle">
@@ -998,26 +594,18 @@ with col_titulo:
 
 st.divider()
 
-
-# =========================================================
-# CARGA DE ARCHIVOS
-# =========================================================
 st.markdown(
     '<div class="section-title">📂 Sube tus facturas</div>',
     unsafe_allow_html=True,
 )
 
 archivos = st.file_uploader(
-    "Arrastra aquí tus archivos o selecciónalos",
+    "Sube facturas PDF o imágenes",
     type=["pdf", "jpg", "jpeg", "png"],
     accept_multiple_files=True,
-    help="Formatos permitidos: PDF, JPG, JPEG y PNG",
+    label_visibility="collapsed",
 )
 
-
-# =========================================================
-# PROCESAMIENTO
-# =========================================================
 if archivos:
     resultados = []
     barra = st.progress(0, text="Preparando documentos...")
@@ -1031,24 +619,18 @@ if archivos:
             else:
                 texto, bloques = leer_imagen(archivo)
 
-            datos_extraidos = extraer_datos(
-                texto,
-                bloques,
-                archivo.name,
+            resultados.append(
+                extraer_datos(
+                    texto,
+                    bloques,
+                    archivo.name,
+                )
             )
-
-            datos_extraidos = aplicar_memoria(
-                datos_extraidos,
-                memoria_correcciones,
-            )
-
-            resultados.append(datos_extraidos)
 
         except Exception as error:
             resultados.append(
                 {
                     "Estado": "ERROR",
-                    "Confianza": 0,
                     "Tipo documento": "ERROR",
                     "Archivo": archivo.name,
                     "Fecha": "",
@@ -1069,74 +651,35 @@ if archivos:
 
         barra.progress(
             indice / len(archivos),
-            text=f"Procesando {indice} de {len(archivos)} documentos...",
+            text=(
+                f"Procesando {indice} de "
+                f"{len(archivos)} documentos..."
+            ),
         )
 
     barra.empty()
 
     df = pd.DataFrame(resultados)
-    df = marcar_duplicados(df)
-    df_original = df.copy(deep=True)
 
     cantidad_ok = int((df["Estado"] == "OK").sum())
     cantidad_revisar = int((df["Estado"] == "REVISAR").sum())
     cantidad_error = int((df["Estado"] == "ERROR").sum())
-
-    total_facturado = 0.0
-    for valor in df["Total"].tolist():
-        if es_monto_valido(valor):
-            total_facturado += float(valor)
 
     st.markdown(
         '<div class="section-title">📊 Resumen del procesamiento</div>',
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3, c4 = st.columns(4)
+    columna_ok, columna_revisar, columna_error = st.columns(3)
 
-    with c1:
-        st.markdown(
-            f"""
-            <div class="summary-card">
-                <div class="summary-label">✅ Facturas OK</div>
-                <div class="summary-value ok-value">{cantidad_ok}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    with columna_ok:
+        st.metric("✅ Facturas OK", cantidad_ok)
 
-    with c2:
-        st.markdown(
-            f"""
-            <div class="summary-card">
-                <div class="summary-label">⚠️ Para revisar</div>
-                <div class="summary-value review-value">{cantidad_revisar}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    with columna_revisar:
+        st.metric("⚠️ Para revisar", cantidad_revisar)
 
-    with c3:
-        st.markdown(
-            f"""
-            <div class="summary-card">
-                <div class="summary-label">❌ Errores</div>
-                <div class="summary-value error-value">{cantidad_error}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with c4:
-        st.markdown(
-            f"""
-            <div class="summary-card">
-                <div class="summary-label">💰 Total detectado</div>
-                <div class="summary-value total-value">${total_facturado:,.2f}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    with columna_error:
+        st.metric("❌ Errores", cantidad_error)
 
     st.markdown(
         '<div class="section-title">📋 Revisa y corrige antes de descargar</div>',
@@ -1148,119 +691,30 @@ if archivos:
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
-        height=min(640, 140 + len(df) * 42),
+        height=min(620, 130 + len(df) * 40),
         disabled=["Archivo"],
-        column_config={
-            "Estado": st.column_config.SelectboxColumn(
-                "Estado",
-                options=["OK", "REVISAR", "ERROR"],
-                width="small",
-            ),
-            "Confianza": st.column_config.ProgressColumn(
-                "Confianza",
-                min_value=0,
-                max_value=100,
-                format="%d%%",
-                width="small",
-            ),
-            "Archivo": st.column_config.TextColumn(width="large"),
-            "Factura": st.column_config.TextColumn(width="medium"),
-            "Proveedor": st.column_config.TextColumn(width="large"),
-            "Proyecto": st.column_config.TextColumn(
-                "Proyecto",
-                width="medium",
-                help=(
-                    "Escribe el nombre del proyecto o déjalo vacío. "
-                    "Si es nuevo, se creará al guardar."
-                ),
-            ),
-            "Observación": st.column_config.TextColumn(width="large"),
-        },
     )
 
-    nombre_excel = (
-        "FACTURAS_"
-        + datetime.now().strftime("%Y-%m-%d_%H-%M")
-        + ".xlsx"
+    st.download_button(
+        "📥 Descargar Excel",
+        data=crear_excel(df_editado),
+        file_name="facturas_extraidas.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
     )
-
-    columna_descarga, columna_guardar = st.columns([1, 1])
-
-    with columna_descarga:
-        st.download_button(
-            "📥 Descargar Excel",
-            data=crear_excel(df_editado),
-            file_name=nombre_excel,
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
-            use_container_width=True,
-        )
-
-    with columna_guardar:
-        guardar = st.button(
-            "💾 Guardar en base de datos",
-            type="primary",
-            use_container_width=True,
-            disabled=(supabase is None),
-        )
-
-    if guardar:
-        with st.spinner("Guardando facturas y correcciones..."):
-            guardadas, duplicadas, errores_guardado = guardar_en_supabase(
-                supabase,
-                df_original,
-                df_editado,
-            )
-
-        if guardadas:
-            st.success(
-                f"Se guardaron {guardadas} factura(s) correctamente."
-            )
-
-        if duplicadas:
-            st.warning(
-                f"{duplicadas} factura(s) ya existían y no se duplicaron."
-            )
-
-        if errores_guardado:
-            st.error(
-                "No se guardaron algunos registros:\n\n"
-                + "\n".join(f"- {error}" for error in errores_guardado)
-            )
-
-        if guardadas and not errores_guardado:
-            st.info(
-                "Las facturas y las correcciones quedaron guardadas. "
-                "Los proyectos nuevos también se añadieron a la base."
-            )
-
-    with st.expander("👁️ Vista previa de los documentos", expanded=False):
-        archivo_vista = st.selectbox(
-            "Selecciona un archivo",
-            options=[archivo.name for archivo in archivos],
-        )
-
-        archivo_seleccionado = next(
-            archivo
-            for archivo in archivos
-            if archivo.name == archivo_vista
-        )
-
-        vista_previa_archivo(archivo_seleccionado)
 
 else:
     st.info(
         "Carga uno o varios archivos PDF, JPG, JPEG o PNG para comenzar."
     )
 
-
 st.markdown(
     """
     <div class="footer">
         <b>Solar Team</b><br>
-        Automatización de información de facturas · Versión 1.0
+        Automatización de información de facturas.
     </div>
     """,
     unsafe_allow_html=True,
