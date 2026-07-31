@@ -1,5 +1,5 @@
-import os
 import base64
+import os
 import re
 import unicodedata
 from io import BytesIO
@@ -25,17 +25,6 @@ LOGO_CANDIDATES = [
     BASE_DIR / "logo_corregido.png",
 ]
 
-
-def convertir_imagen_base64(ruta: Path) -> str:
-    with open(ruta, "rb") as archivo:
-        contenido = base64.b64encode(archivo.read()).decode("utf-8")
-
-    extension = ruta.suffix.lower().replace(".", "")
-    if extension == "jpg":
-        extension = "jpeg"
-
-    return f"data:image/{extension};base64,{contenido}"
-
 if os.name == "nt":
     ruta_tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
     if ruta_tesseract.exists():
@@ -49,70 +38,6 @@ st.markdown(
         max-width: 1550px;
         padding-top: 1.4rem;
         padding-bottom: 2rem;
-    }
-
-    .header-container {
-        display: flex;
-        align-items: center;
-        gap: 34px;
-        min-height: 170px;
-        padding: 10px 0 22px 0;
-    }
-
-    .logo-container {
-        width: 260px;
-        min-width: 260px;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        padding: 18px 24px 18px 4px;
-        border-right: 1px solid #D7DCE3;
-        overflow: visible;
-    }
-
-    .logo-container img {
-        display: block;
-        width: 210px;
-        max-width: 100%;
-        height: auto;
-        object-fit: contain;
-    }
-
-    .title-container {
-        flex: 1;
-        min-width: 0;
-    }
-
-    .header-divider {
-        border: none;
-        border-top: 1px solid #D7DCE3;
-        margin: 0 0 28px 0;
-    }
-
-    @media (max-width: 900px) {
-        .header-container {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 14px;
-            min-height: auto;
-        }
-
-        .logo-container {
-            width: 100%;
-            min-width: 100%;
-            justify-content: flex-start;
-            padding: 8px 0 16px 0;
-            border-right: none;
-            border-bottom: 1px solid #D7DCE3;
-        }
-
-        .logo-container img {
-            width: 190px;
-        }
-
-        .main-title {
-            font-size: 2rem;
-        }
     }
     .main-title {
         font-size: 2.7rem;
@@ -139,6 +64,84 @@ st.markdown(
         background: #F8FAFC;
         color: #64748B;
         font-size: 0.9rem;
+    }
+
+    .app-header {
+        display: flex;
+        align-items: center;
+        gap: 34px;
+        width: 100%;
+        padding: 4px 0 26px 0;
+    }
+
+    .app-logo-box {
+        width: 280px;
+        min-width: 280px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 14px 26px 14px 8px;
+        border-right: 1px solid #D7DCE3;
+        box-sizing: border-box;
+    }
+
+    .app-logo-box img {
+        display: block;
+        width: 220px;
+        max-width: 100%;
+        height: auto;
+        object-fit: contain;
+    }
+
+    .app-title-box {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .app-title {
+        margin: 0 0 10px 0;
+        color: #172B4D;
+        font-size: 2.65rem;
+        line-height: 1.08;
+        font-weight: 800;
+    }
+
+    .app-subtitle {
+        margin: 0;
+        color: #475569;
+        font-size: 1.05rem;
+        line-height: 1.45;
+    }
+
+    .app-divider {
+        border: 0;
+        border-top: 1px solid #D7DCE3;
+        margin: 0 0 28px 0;
+    }
+
+    @media (max-width: 850px) {
+        .app-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 16px;
+        }
+
+        .app-logo-box {
+            width: 100%;
+            min-width: 0;
+            justify-content: flex-start;
+            padding: 8px 0 16px 0;
+            border-right: 0;
+            border-bottom: 1px solid #D7DCE3;
+        }
+
+        .app-logo-box img {
+            width: 190px;
+        }
+
+        .app-title {
+            font-size: 2rem;
+        }
     }
     </style>
     """,
@@ -629,6 +632,18 @@ def crear_excel(df: pd.DataFrame) -> bytes:
     return salida.getvalue()
 
 
+def imagen_a_base64(ruta: Path) -> str:
+    extension = ruta.suffix.lower().replace(".", "")
+    if extension == "jpg":
+        extension = "jpeg"
+
+    contenido = base64.b64encode(
+        ruta.read_bytes()
+    ).decode("utf-8")
+
+    return f"data:image/{extension};base64,{contenido}"
+
+
 logo = next(
     (
         ruta
@@ -639,51 +654,44 @@ logo = next(
 )
 
 if logo:
-    logo_src = convertir_imagen_base64(logo)
+    logo_src = imagen_a_base64(logo)
 
     encabezado = f"""
-    <div class="header-container">
-        <div class="logo-container">
+    <div class="app-header">
+        <div class="app-logo-box">
             <img src="{logo_src}" alt="Solar Team">
         </div>
 
-        <div class="title-container">
-            <div class="main-title">
-                Automatizador de Facturas
-            </div>
-
-            <div class="subtitle">
+        <div class="app-title-box">
+            <h1 class="app-title">Automatizador de Facturas</h1>
+            <p class="app-subtitle">
                 Carga facturas PDF o imágenes, revisa la información extraída
                 y genera un Excel listo para descargar.
-            </div>
+            </p>
         </div>
     </div>
 
-    <hr class="header-divider">
+    <hr class="app-divider">
     """
 else:
     encabezado = """
-    <div class="header-container">
-        <div class="title-container">
-            <div class="main-title">
-                Automatizador de Facturas
-            </div>
-
-            <div class="subtitle">
+    <div class="app-header">
+        <div class="app-title-box">
+            <h1 class="app-title">Automatizador de Facturas</h1>
+            <p class="app-subtitle">
                 Carga facturas PDF o imágenes, revisa la información extraída
                 y genera un Excel listo para descargar.
-            </div>
+            </p>
         </div>
     </div>
 
-    <hr class="header-divider">
+    <hr class="app-divider">
     """
 
 st.markdown(
     encabezado,
     unsafe_allow_html=True,
 )
-
 
 st.markdown(
     '<div class="section-title">📂 Sube tus facturas</div>',
