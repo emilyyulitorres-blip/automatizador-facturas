@@ -1,4 +1,5 @@
 import os
+import base64
 import re
 import unicodedata
 from io import BytesIO
@@ -22,7 +23,19 @@ RUC_SOLARTEAM = "1793069479001"
 
 LOGO_CANDIDATES = [
     BASE_DIR / "logo_corregido.png",
+    BASE_DIR / "logo.png",
 ]
+
+
+def convertir_imagen_base64(ruta: Path) -> str:
+    with open(ruta, "rb") as archivo:
+        contenido = base64.b64encode(archivo.read()).decode("utf-8")
+
+    extension = ruta.suffix.lower().replace(".", "")
+    if extension == "jpg":
+        extension = "jpeg"
+
+    return f"data:image/{extension};base64,{contenido}"
 
 if os.name == "nt":
     ruta_tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
@@ -37,6 +50,70 @@ st.markdown(
         max-width: 1550px;
         padding-top: 1.4rem;
         padding-bottom: 2rem;
+    }
+
+    .header-container {
+        display: flex;
+        align-items: center;
+        gap: 34px;
+        min-height: 170px;
+        padding: 10px 0 22px 0;
+    }
+
+    .logo-container {
+        width: 260px;
+        min-width: 260px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 18px 24px 18px 4px;
+        border-right: 1px solid #D7DCE3;
+        overflow: visible;
+    }
+
+    .logo-container img {
+        display: block;
+        width: 210px;
+        max-width: 100%;
+        height: auto;
+        object-fit: contain;
+    }
+
+    .title-container {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .header-divider {
+        border: none;
+        border-top: 1px solid #D7DCE3;
+        margin: 0 0 28px 0;
+    }
+
+    @media (max-width: 900px) {
+        .header-container {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 14px;
+            min-height: auto;
+        }
+
+        .logo-container {
+            width: 100%;
+            min-width: 100%;
+            justify-content: flex-start;
+            padding: 8px 0 16px 0;
+            border-right: none;
+            border-bottom: 1px solid #D7DCE3;
+        }
+
+        .logo-container img {
+            width: 190px;
+        }
+
+        .main-title {
+            font-size: 2rem;
+        }
     }
     .main-title {
         font-size: 2.7rem;
@@ -553,44 +630,61 @@ def crear_excel(df: pd.DataFrame) -> bytes:
     return salida.getvalue()
 
 
-col_logo, col_titulo = st.columns(
-    [1.25, 5.75],
-    vertical_alignment="center",
+logo = next(
+    (
+        ruta
+        for ruta in LOGO_CANDIDATES
+        if ruta.exists()
+    ),
+    None,
 )
 
-with col_logo:
-    logo = next(
-        (
-            ruta
-            for ruta in LOGO_CANDIDATES
-            if ruta.exists()
-        ),
-        None,
-    )
+if logo:
+    logo_src = convertir_imagen_base64(logo)
 
-    if logo:
-        st.image(
-            str(logo),
-            use_container_width=True,
-        )
-
-with col_titulo:
-    st.markdown(
-        '<div class="main-title">Automatizador de Facturas</div>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        """
-        <div class="subtitle">
-            Carga facturas PDF o imágenes, revisa la información extraída
-            y genera un Excel listo para descargar.
+    encabezado = f"""
+    <div class="header-container">
+        <div class="logo-container">
+            <img src="{logo_src}" alt="Solar Team">
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
-st.divider()
+        <div class="title-container">
+            <div class="main-title">
+                Automatizador de Facturas
+            </div>
+
+            <div class="subtitle">
+                Carga facturas PDF o imágenes, revisa la información extraída
+                y genera un Excel listo para descargar.
+            </div>
+        </div>
+    </div>
+
+    <hr class="header-divider">
+    """
+else:
+    encabezado = """
+    <div class="header-container">
+        <div class="title-container">
+            <div class="main-title">
+                Automatizador de Facturas
+            </div>
+
+            <div class="subtitle">
+                Carga facturas PDF o imágenes, revisa la información extraída
+                y genera un Excel listo para descargar.
+            </div>
+        </div>
+    </div>
+
+    <hr class="header-divider">
+    """
+
+st.markdown(
+    encabezado,
+    unsafe_allow_html=True,
+)
+
 
 st.markdown(
     '<div class="section-title">📂 Sube tus facturas</div>',
