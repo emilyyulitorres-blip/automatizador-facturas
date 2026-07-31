@@ -718,7 +718,7 @@ def mostrar_encabezado() -> None:
     )
 
     col_logo, col_texto = st.columns(
-        [1.6, 5.4],
+        [1.2, 5.8],
         vertical_alignment="center",
     )
 
