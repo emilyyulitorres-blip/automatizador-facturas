@@ -715,7 +715,16 @@ def mostrar_encabezado() -> None:
     with col_logo:
         if logo:
             # Streamlit nativo: evita que el HTML se muestre como texto.
-            st.image(str(logo), width=180)
+            col_logo, col_texto = st.columns([1.2, 3])
+
+with col_logo:
+    st.image(str(logo_path), width=300)
+
+with col_texto:
+    st.markdown("<h1>Automatizador de Facturas</h1>", unsafe_allow_html=True)
+    st.markdown(
+        "Carga facturas PDF o imágenes, revisa la información extraída y genera un Excel listo para descargar."
+    )
         else:
             st.caption("Logo no encontrado")
 
