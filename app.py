@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent
 RUC_SOLARTEAM = "1793069479001"
 
 LOGO_CANDIDATES = [
-    BASE_DIR / "logo.png",
+    BASE_DIR / "logo_corregido.png",
 ]
 
 if os.name == "nt":
