@@ -725,9 +725,9 @@ def mostrar_encabezado() -> None:
     with col_logo:
         if logo:
             st.image(
-                str(logo),
-                width=300,
-            )
+    str(logo),
+    use_container_width=True,
+))
         else:
             st.caption("Logo no encontrado")
 
