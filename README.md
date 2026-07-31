@@ -1,24 +1,23 @@
-# Automatizador de Facturas - Solar Team
+# Automatizador de Facturas v4
 
-Cambios de esta versión:
-- El proyecto es opcional.
-- El usuario puede escribir un proyecto nuevo directamente.
-- Los proyectos nuevos se crean automáticamente en Supabase.
-- Las facturas también pueden guardarse sin proyecto.
-- El logo se muestra con ancho fijo para evitar recortes o deformaciones.
-- Se mantiene el aprendizaje de Proveedor, Categoría y Consumo por RUC.
+Versión final modular.
 
-Antes de usar la creación automática de proyectos, ejecuta en Supabase:
+## Archivos que debes subir a GitHub
 
-```sql
-grant insert on table public.proyectos to anon;
+- `app.py`
+- carpeta `modules`
+- `logo_corregido.png` o `logo.png`
+- `requirements.txt`
+- `packages.txt`
 
-drop policy if exists "anon crea proyectos"
-on public.proyectos;
+## Streamlit Secrets
 
-create policy "anon crea proyectos"
-on public.proyectos
-for insert
-to anon
-with check (true);
+```toml
+SUPABASE_URL = "..."
+SUPABASE_KEY = "..."
 ```
+
+## Importante
+
+El encabezado usa componentes nativos de Streamlit (`st.columns`, `st.image`,
+`st.title` y `st.caption`). Por eso el HTML ya no puede aparecer como texto.
