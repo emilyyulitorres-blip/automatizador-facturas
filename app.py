@@ -706,7 +706,6 @@ def aplicar_estilos() -> None:
         unsafe_allow_html=True,
     )
 
-
 def mostrar_encabezado() -> None:
     logo = next(
         (ruta for ruta in LOGO_CANDIDATES if ruta.exists()),
