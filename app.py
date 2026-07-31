@@ -734,7 +734,7 @@ def mostrar_encabezado() -> None:
             <h1 style="margin-bottom:0;color:#1f2d52;">
                 Automatizador de Facturas
             </h1>
-            <p style="font-size:20px;color:#6b7280;margin-top:8px;">
+            <p style="font-size:10px;color:#6b7280;margin-top:8px;">
                 Carga facturas PDF o imágenes, revisa la información extraída
                 y genera un Excel listo para descargar.
             </p>
