@@ -1,6 +1,8 @@
+
 import os
 import re
 import unicodedata
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -8,9 +10,15 @@ import fitz
 import pandas as pd
 import pytesseract
 import streamlit as st
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 
+# =========================================================
+# CONFIGURACIÓN
+# =========================================================
 st.set_page_config(
     page_title="Automatizador de Facturas",
     page_icon="📄",
@@ -21,9 +29,9 @@ BASE_DIR = Path(__file__).resolve().parent
 RUC_SOLARTEAM = "1793069479001"
 
 LOGO_CANDIDATES = [
+    BASE_DIR / "logo.png",
     BASE_DIR / "logo_solarteam.png",
     BASE_DIR / "LOGO SOLAR TEAM.png",
-    BASE_DIR / "logo.png",
 ]
 
 if os.name == "nt":
@@ -32,39 +40,78 @@ if os.name == "nt":
         pytesseract.pytesseract.tesseract_cmd = str(ruta_tesseract)
 
 
+# =========================================================
+# ESTILOS
+# =========================================================
 st.markdown(
     """
     <style>
     .block-container {
         max-width: 1550px;
-        padding-top: 1.4rem;
+        padding-top: 1.2rem;
         padding-bottom: 2rem;
     }
+
     .main-title {
-        font-size: 2.7rem;
+        font-size: 2.65rem;
         line-height: 1.05;
         font-weight: 800;
         color: #172B4D;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.45rem;
     }
+
     .subtitle {
-        font-size: 1.05rem;
+        font-size: 1.02rem;
         color: #475569;
     }
+
     .section-title {
-        font-size: 1.55rem;
+        font-size: 1.5rem;
         font-weight: 750;
         color: #172B4D;
-        margin-top: 1.6rem;
+        margin-top: 1.5rem;
         margin-bottom: 0.8rem;
     }
+
+    .summary-card {
+        border: 1px solid #E2E8F0;
+        border-radius: 16px;
+        padding: 18px 22px;
+        min-height: 115px;
+        background: #FFFFFF;
+        box-shadow: 0 3px 12px rgba(15, 23, 42, 0.05);
+    }
+
+    .summary-label {
+        font-size: 0.95rem;
+        color: #475569;
+        margin-bottom: 12px;
+    }
+
+    .summary-value {
+        font-size: 2rem;
+        font-weight: 800;
+    }
+
+    .ok-value { color: #16A34A; }
+    .review-value { color: #F59E0B; }
+    .error-value { color: #E11D48; }
+    .total-value { color: #172B4D; }
+
     .footer {
         margin-top: 2rem;
-        padding: 20px 24px;
+        padding: 18px 22px;
         border-radius: 14px;
         background: #F8FAFC;
         color: #64748B;
         font-size: 0.9rem;
+    }
+
+    [data-testid="stFileUploader"] {
+        border: 1px dashed #94A3B8;
+        border-radius: 14px;
+        padding: 0.4rem;
+        background: #F8FAFC;
     }
     </style>
     """,
@@ -72,6 +119,9 @@ st.markdown(
 )
 
 
+# =========================================================
+# PATRONES
+# =========================================================
 PATRON_FACTURA = re.compile(r"\b\d{3}-\d{3}-\d{9}\b")
 PATRON_RUC = re.compile(r"\b\d{13}\b")
 PATRON_FECHA = re.compile(
@@ -82,6 +132,9 @@ PATRON_MONTO = re.compile(
 )
 
 
+# =========================================================
+# UTILIDADES
+# =========================================================
 def normalizar(texto: str) -> str:
     texto = unicodedata.normalize("NFKD", texto or "")
     texto = "".join(
@@ -122,6 +175,17 @@ def monto_normalizado(valor: str) -> str:
         return ""
 
 
+def es_monto_valido(valor: str) -> bool:
+    try:
+        float(valor)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+# =========================================================
+# IDENTIFICACIÓN DEL DOCUMENTO
+# =========================================================
 def detectar_tipo(texto: str) -> str:
     n = normalizar(texto)
     compacto = re.sub(r"[^A-Z]", "", n)
@@ -202,28 +266,11 @@ def es_proveedor_valido(linea: str) -> bool:
     n = normalizar(linea)
 
     excluir = [
-        "RUC",
-        "FACTURA",
-        "NUMERO DE AUTORIZACION",
-        "CLAVE DE ACCESO",
-        "FECHA",
-        "AMBIENTE",
-        "EMISION",
-        "PRODUCCION",
-        "NORMAL",
-        "DIRECCION",
-        "OBLIGADO",
-        "CONTRIBUYENTE",
-        "RAZON SOCIAL",
-        "IDENTIFICACION",
-        "SOLARTEAM",
-        "SOLAR TEAM",
-        "SUBTOTAL",
-        "TOTAL",
-        "CODIGO",
-        "DESCRIPCION",
-        "CANTIDAD",
-        "PRECIO",
+        "RUC", "FACTURA", "NUMERO DE AUTORIZACION", "CLAVE DE ACCESO",
+        "FECHA", "AMBIENTE", "EMISION", "PRODUCCION", "NORMAL",
+        "DIRECCION", "OBLIGADO", "CONTRIBUYENTE", "RAZON SOCIAL",
+        "IDENTIFICACION", "SOLARTEAM", "SOLAR TEAM", "SUBTOTAL",
+        "TOTAL", "CODIGO", "DESCRIPCION", "CANTIDAD", "PRECIO",
     ]
 
     return (
@@ -253,6 +300,9 @@ def extraer_proveedor(texto: str, ruc_emisor: str) -> str:
     return ""
 
 
+# =========================================================
+# EXTRACCIÓN DE MONTOS
+# =========================================================
 def extraer_monto_desde_bloques(
     bloques: list[tuple],
     etiquetas: list[str],
@@ -281,10 +331,7 @@ def extraer_monto_desde_bloques(
     return ""
 
 
-def buscar_monto_en_texto(
-    texto: str,
-    patrones: list[str],
-) -> str:
+def buscar_monto_en_texto(texto: str, patrones: list[str]) -> str:
     n = normalizar(texto)
 
     for patron in patrones:
@@ -305,11 +352,7 @@ def extraer_subtotal(texto: str, bloques: list[tuple]) -> str:
             "BASE IMPONIBLE",
             "BASE GRAVADA",
         ],
-        excluir=[
-            "NO OBJETO",
-            "EXENTO",
-            "DESCUENTO",
-        ],
+        excluir=["NO OBJETO", "EXENTO", "DESCUENTO"],
     )
 
     if valor:
@@ -329,18 +372,8 @@ def extraer_subtotal(texto: str, bloques: list[tuple]) -> str:
 def extraer_iva(texto: str, bloques: list[tuple]) -> str:
     valor = extraer_monto_desde_bloques(
         bloques,
-        [
-            "IVA 15%",
-            "IVA 12%",
-            "TOTAL IVA",
-            "IMPUESTO IVA",
-        ],
-        excluir=[
-            "SUBTOTAL",
-            "NO OBJETO",
-            "EXENTO",
-            "INCLUYE IVA",
-        ],
+        ["IVA 15%", "IVA 12%", "TOTAL IVA", "IMPUESTO IVA"],
+        excluir=["SUBTOTAL", "NO OBJETO", "EXENTO", "INCLUYE IVA"],
     )
 
     if valor:
@@ -366,12 +399,7 @@ def extraer_total(texto: str, bloques: list[tuple]) -> str:
             "MONTO TOTAL",
             "TOTAL FACTURA",
         ],
-        excluir=[
-            "SIN SUBSIDIO",
-            "DESCUENTO",
-            "SUBTOTAL",
-            "AHORRO",
-        ],
+        excluir=["SIN SUBSIDIO", "DESCUENTO", "SUBTOTAL", "AHORRO"],
     )
 
     if valor:
@@ -388,18 +416,39 @@ def extraer_total(texto: str, bloques: list[tuple]) -> str:
     )
 
 
+# =========================================================
+# VALIDACIÓN, CONFIANZA Y DUPLICADOS
+# =========================================================
+def calcular_confianza(datos: dict) -> int:
+    campos = [
+        "Fecha", "Factura", "Proveedor", "RUC Emisor",
+        "Subtotal", "IVA", "Total",
+    ]
+
+    completos = sum(
+        1
+        for campo in campos
+        if str(datos.get(campo, "")).strip()
+    )
+
+    confianza = int((completos / len(campos)) * 100)
+
+    if datos["Tipo documento"].startswith("NO VÁLIDA"):
+        confianza = min(confianza, 40)
+
+    if datos.get("Observación"):
+        confianza = max(0, confianza - 10)
+
+    return confianza
+
+
 def validar(datos: dict) -> tuple[str, str]:
     if datos["Tipo documento"].startswith("NO VÁLIDA"):
         return "REVISAR", "Documento no registrable como factura"
 
     obligatorios = [
-        "Fecha",
-        "Factura",
-        "Proveedor",
-        "RUC Emisor",
-        "Subtotal",
-        "IVA",
-        "Total",
+        "Fecha", "Factura", "Proveedor", "RUC Emisor",
+        "Subtotal", "IVA", "Total",
     ]
 
     faltantes = [
@@ -410,6 +459,9 @@ def validar(datos: dict) -> tuple[str, str]:
 
     if faltantes:
         return "REVISAR", "Faltan: " + ", ".join(faltantes)
+
+    if len(datos["RUC Emisor"]) != 13:
+        return "REVISAR", "RUC emisor inválido"
 
     try:
         subtotal = float(datos["Subtotal"])
@@ -435,6 +487,7 @@ def extraer_datos(
 
     datos = {
         "Estado": "",
+        "Confianza": 0,
         "Tipo documento": tipo,
         "Archivo": nombre_archivo,
         "Fecha": extraer_fecha(texto),
@@ -455,10 +508,38 @@ def extraer_datos(
     estado, observacion = validar(datos)
     datos["Estado"] = estado
     datos["Observación"] = observacion
+    datos["Confianza"] = calcular_confianza(datos)
 
     return datos
 
 
+def marcar_duplicados(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "Factura" not in df.columns:
+        return df
+
+    duplicados = (
+        df["Factura"].astype(str).str.strip().ne("")
+        & df["Factura"].astype(str).duplicated(keep=False)
+    )
+
+    for indice in df.index[duplicados]:
+        df.at[indice, "Estado"] = "REVISAR"
+        observacion = str(df.at[indice, "Observación"] or "").strip()
+        mensaje = "Factura duplicada en la carga"
+        df.at[indice, "Observación"] = (
+            f"{observacion}; {mensaje}".strip("; ")
+        )
+        df.at[indice, "Confianza"] = min(
+            int(df.at[indice, "Confianza"]),
+            70,
+        )
+
+    return df
+
+
+# =========================================================
+# OCR Y LECTURA
+# =========================================================
 def preparar_imagen(imagen: Image.Image) -> Image.Image:
     imagen = ImageOps.exif_transpose(imagen).convert("L")
     imagen = ImageOps.autocontrast(imagen)
@@ -525,6 +606,32 @@ def leer_pdf(archivo) -> tuple[str, list[tuple]]:
     return texto_total, bloques_totales
 
 
+def vista_previa_archivo(archivo):
+    nombre = archivo.name.lower()
+
+    if nombre.endswith((".jpg", ".jpeg", ".png")):
+        imagen = Image.open(BytesIO(archivo.getvalue()))
+        st.image(imagen, use_container_width=True)
+        return
+
+    if nombre.endswith(".pdf"):
+        with fitz.open(stream=archivo.getvalue(), filetype="pdf") as documento:
+            pagina = documento[0]
+            pixmap = pagina.get_pixmap(
+                matrix=fitz.Matrix(1.4, 1.4),
+                alpha=False,
+            )
+            imagen = Image.frombytes(
+                "RGB",
+                [pixmap.width, pixmap.height],
+                pixmap.samples,
+            )
+            st.image(imagen, use_container_width=True)
+
+
+# =========================================================
+# EXCEL PROFESIONAL
+# =========================================================
 def crear_excel(df: pd.DataFrame) -> bytes:
     salida = BytesIO()
 
@@ -535,38 +642,70 @@ def crear_excel(df: pd.DataFrame) -> bytes:
             sheet_name="Facturas",
         )
 
-        hoja = writer.sheets["Facturas"]
-        hoja.freeze_panes = "A2"
-        hoja.auto_filter.ref = hoja.dimensions
+    salida.seek(0)
+    libro = load_workbook(salida)
+    hoja = libro["Facturas"]
 
-        for columna in hoja.columns:
-            ancho = min(
-                max(
-                    len(str(celda.value or ""))
-                    for celda in columna
-                ) + 2,
-                45,
-            )
+    color_azul = "172B4D"
+    color_verde = "1F9D68"
 
-            hoja.column_dimensions[
-                columna[0].column_letter
-            ].width = ancho
+    for celda in hoja[1]:
+        celda.fill = PatternFill(
+            fill_type="solid",
+            fgColor=color_azul,
+        )
+        celda.font = Font(
+            color="FFFFFF",
+            bold=True,
+        )
+        celda.alignment = Alignment(
+            horizontal="center",
+            vertical="center",
+        )
 
-    return salida.getvalue()
+    hoja.freeze_panes = "A2"
+    hoja.auto_filter.ref = hoja.dimensions
+    hoja.row_dimensions[1].height = 24
+
+    for columna in hoja.columns:
+        ancho = min(
+            max(len(str(celda.value or "")) for celda in columna) + 2,
+            45,
+        )
+        hoja.column_dimensions[columna[0].column_letter].width = ancho
+
+    if hoja.max_row >= 2 and hoja.max_column >= 1:
+        referencia = f"A1:{hoja.cell(hoja.max_row, hoja.max_column).coordinate}"
+        tabla = Table(
+            displayName="TablaFacturas",
+            ref=referencia,
+        )
+        estilo = TableStyleInfo(
+            name="TableStyleMedium2",
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False,
+        )
+        tabla.tableStyleInfo = estilo
+        hoja.add_table(tabla)
+
+    salida_final = BytesIO()
+    libro.save(salida_final)
+    return salida_final.getvalue()
 
 
+# =========================================================
+# ENCABEZADO
+# =========================================================
 col_logo, col_titulo = st.columns(
-    [1.25, 5.75],
+    [1.2, 5.8],
     vertical_alignment="center",
 )
 
 with col_logo:
     logo = next(
-        (
-            ruta
-            for ruta in LOGO_CANDIDATES
-            if ruta.exists()
-        ),
+        (ruta for ruta in LOGO_CANDIDATES if ruta.exists()),
         None,
     )
 
@@ -581,7 +720,6 @@ with col_titulo:
         '<div class="main-title">Automatizador de Facturas</div>',
         unsafe_allow_html=True,
     )
-
     st.markdown(
         """
         <div class="subtitle">
@@ -594,18 +732,26 @@ with col_titulo:
 
 st.divider()
 
+
+# =========================================================
+# CARGA DE ARCHIVOS
+# =========================================================
 st.markdown(
     '<div class="section-title">📂 Sube tus facturas</div>',
     unsafe_allow_html=True,
 )
 
 archivos = st.file_uploader(
-    "Sube facturas PDF o imágenes",
+    "Arrastra aquí tus archivos o selecciónalos",
     type=["pdf", "jpg", "jpeg", "png"],
     accept_multiple_files=True,
-    label_visibility="collapsed",
+    help="Formatos permitidos: PDF, JPG, JPEG y PNG",
 )
 
+
+# =========================================================
+# PROCESAMIENTO
+# =========================================================
 if archivos:
     resultados = []
     barra = st.progress(0, text="Preparando documentos...")
@@ -631,6 +777,7 @@ if archivos:
             resultados.append(
                 {
                     "Estado": "ERROR",
+                    "Confianza": 0,
                     "Tipo documento": "ERROR",
                     "Archivo": archivo.name,
                     "Fecha": "",
@@ -651,35 +798,73 @@ if archivos:
 
         barra.progress(
             indice / len(archivos),
-            text=(
-                f"Procesando {indice} de "
-                f"{len(archivos)} documentos..."
-            ),
+            text=f"Procesando {indice} de {len(archivos)} documentos...",
         )
 
     barra.empty()
 
     df = pd.DataFrame(resultados)
+    df = marcar_duplicados(df)
 
     cantidad_ok = int((df["Estado"] == "OK").sum())
     cantidad_revisar = int((df["Estado"] == "REVISAR").sum())
     cantidad_error = int((df["Estado"] == "ERROR").sum())
+
+    total_facturado = 0.0
+    for valor in df["Total"].tolist():
+        if es_monto_valido(valor):
+            total_facturado += float(valor)
 
     st.markdown(
         '<div class="section-title">📊 Resumen del procesamiento</div>',
         unsafe_allow_html=True,
     )
 
-    columna_ok, columna_revisar, columna_error = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
 
-    with columna_ok:
-        st.metric("✅ Facturas OK", cantidad_ok)
+    with c1:
+        st.markdown(
+            f"""
+            <div class="summary-card">
+                <div class="summary-label">✅ Facturas OK</div>
+                <div class="summary-value ok-value">{cantidad_ok}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    with columna_revisar:
-        st.metric("⚠️ Para revisar", cantidad_revisar)
+    with c2:
+        st.markdown(
+            f"""
+            <div class="summary-card">
+                <div class="summary-label">⚠️ Para revisar</div>
+                <div class="summary-value review-value">{cantidad_revisar}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    with columna_error:
-        st.metric("❌ Errores", cantidad_error)
+    with c3:
+        st.markdown(
+            f"""
+            <div class="summary-card">
+                <div class="summary-label">❌ Errores</div>
+                <div class="summary-value error-value">{cantidad_error}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with c4:
+        st.markdown(
+            f"""
+            <div class="summary-card">
+                <div class="summary-label">💰 Total detectado</div>
+                <div class="summary-value total-value">${total_facturado:,.2f}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     st.markdown(
         '<div class="section-title">📋 Revisa y corrige antes de descargar</div>',
@@ -691,30 +876,66 @@ if archivos:
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
-        height=min(620, 130 + len(df) * 40),
+        height=min(640, 140 + len(df) * 42),
         disabled=["Archivo"],
+        column_config={
+            "Estado": st.column_config.SelectboxColumn(
+                "Estado",
+                options=["OK", "REVISAR", "ERROR"],
+                width="small",
+            ),
+            "Confianza": st.column_config.ProgressColumn(
+                "Confianza",
+                min_value=0,
+                max_value=100,
+                format="%d%%",
+                width="small",
+            ),
+            "Archivo": st.column_config.TextColumn(width="large"),
+            "Factura": st.column_config.TextColumn(width="medium"),
+            "Proveedor": st.column_config.TextColumn(width="large"),
+            "Observación": st.column_config.TextColumn(width="large"),
+        },
+    )
+
+    nombre_excel = (
+        "FACTURAS_"
+        + datetime.now().strftime("%Y-%m-%d_%H-%M")
+        + ".xlsx"
     )
 
     st.download_button(
         "📥 Descargar Excel",
         data=crear_excel(df_editado),
-        file_name="facturas_extraidas.xlsx",
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
+        file_name=nombre_excel,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+    with st.expander("👁️ Vista previa de los documentos", expanded=False):
+        archivo_vista = st.selectbox(
+            "Selecciona un archivo",
+            options=[archivo.name for archivo in archivos],
+        )
+
+        archivo_seleccionado = next(
+            archivo
+            for archivo in archivos
+            if archivo.name == archivo_vista
+        )
+
+        vista_previa_archivo(archivo_seleccionado)
 
 else:
     st.info(
         "Carga uno o varios archivos PDF, JPG, JPEG o PNG para comenzar."
     )
 
+
 st.markdown(
     """
     <div class="footer">
         <b>Solar Team</b><br>
-        Automatización de información de facturas.
+        Automatización de información de facturas · Versión 1.0
     </div>
     """,
     unsafe_allow_html=True,
