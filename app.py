@@ -709,34 +709,37 @@ def aplicar_estilos() -> None:
 
 def mostrar_encabezado() -> None:
     logo = next(
-        (
-            ruta
-            for ruta in LOGO_CANDIDATES
-            if ruta.exists()
-        ),
+        (ruta for ruta in LOGO_CANDIDATES if ruta.exists()),
         None,
     )
 
+    # Logo más pequeño y texto más amplio
     col_logo, col_texto = st.columns(
-        [1.2, 5.8],
+        [1, 4],
         vertical_alignment="center",
     )
 
     with col_logo:
         if logo:
             st.image(
-    str(logo),
-    use_container_width=True,
-))
+                str(logo),
+                use_container_width=True,
+            )
         else:
             st.caption("Logo no encontrado")
 
     with col_texto:
-        st.title("Automatizador de Facturas")
-
-        st.caption(
-            "Carga facturas PDF o imágenes, revisa la información "
-            "extraída y genera un Excel listo para descargar."
+        st.markdown(
+            """
+            <h1 style="margin-bottom:0;color:#1f2d52;">
+                Automatizador de Facturas
+            </h1>
+            <p style="font-size:20px;color:#6b7280;margin-top:8px;">
+                Carga facturas PDF o imágenes, revisa la información extraída
+                y genera un Excel listo para descargar.
+            </p>
+            """,
+            unsafe_allow_html=True,
         )
 
     st.divider()
