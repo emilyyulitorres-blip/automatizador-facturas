@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from supabase import Client, create_client
 
 
 # =========================================================
@@ -38,6 +39,191 @@ if os.name == "nt":
     ruta_tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
     if ruta_tesseract.exists():
         pytesseract.pytesseract.tesseract_cmd = str(ruta_tesseract)
+
+
+# =========================================================
+# CONEXIÓN A SUPABASE
+# =========================================================
+@st.cache_resource
+def obtener_supabase() -> Client | None:
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+def cargar_proyectos(cliente: Client | None) -> list[dict]:
+    if cliente is None:
+        return []
+
+    try:
+        respuesta = (
+            cliente.table("proyectos")
+            .select("id,nombre")
+            .eq("estado", "Activo")
+            .order("nombre")
+            .execute()
+        )
+        return respuesta.data or []
+    except Exception:
+        return []
+
+
+def cargar_memoria(cliente: Client | None) -> dict:
+    """
+    Recupera las correcciones más recientes por RUC y campo.
+    Solo aplica automáticamente campos estables:
+    Proveedor, Categoría y Consumo.
+    """
+    if cliente is None:
+        return {}
+
+    try:
+        respuesta = (
+            cliente.table("correcciones")
+            .select("id,ruc_emisor,campo,valor_corregido")
+            .order("id", desc=True)
+            .limit(1000)
+            .execute()
+        )
+
+        memoria = {}
+        for fila in respuesta.data or []:
+            clave = (
+                str(fila.get("ruc_emisor") or "").strip(),
+                str(fila.get("campo") or "").strip(),
+            )
+            if clave not in memoria:
+                memoria[clave] = str(
+                    fila.get("valor_corregido") or ""
+                ).strip()
+
+        return memoria
+
+    except Exception:
+        return {}
+
+
+def aplicar_memoria(datos: dict, memoria: dict) -> dict:
+    ruc = str(datos.get("RUC Emisor") or "").strip()
+
+    for campo in ["Proveedor", "Categoría", "Consumo"]:
+        valor_guardado = memoria.get((ruc, campo))
+        if valor_guardado:
+            datos[campo] = valor_guardado
+
+    return datos
+
+
+def convertir_fecha_bd(valor) -> str | None:
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return None
+
+    for formato in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(texto, formato).date().isoformat()
+        except ValueError:
+            continue
+
+    return None
+
+
+def numero_o_none(valor):
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return None
+
+    try:
+        return float(texto.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def guardar_en_supabase(
+    cliente: Client,
+    df_original: pd.DataFrame,
+    df_editado: pd.DataFrame,
+    proyectos_por_nombre: dict,
+) -> tuple[int, int, list[str]]:
+    guardadas = 0
+    duplicadas = 0
+    errores = []
+
+    for indice, fila in df_editado.iterrows():
+        proyecto_nombre = str(fila.get("Proyecto") or "").strip()
+        proyecto_id = proyectos_por_nombre.get(proyecto_nombre)
+
+        if not proyecto_id:
+            errores.append(
+                f"{fila.get('Archivo', 'Documento')}: selecciona un proyecto."
+            )
+            continue
+
+        registro = {
+            "fecha": convertir_fecha_bd(fila.get("Fecha")),
+            "numero_factura": str(fila.get("Factura") or "").strip(),
+            "proveedor": str(fila.get("Proveedor") or "").strip(),
+            "ruc_emisor": str(fila.get("RUC Emisor") or "").strip(),
+            "cliente": str(fila.get("Cliente") or "").strip(),
+            "ruc_cliente": str(fila.get("RUC Cliente") or "").strip(),
+            "subtotal": numero_o_none(fila.get("Subtotal")),
+            "iva": numero_o_none(fila.get("IVA")),
+            "total": numero_o_none(fila.get("Total")),
+            "proyecto_id": proyecto_id,
+            "consumo": str(fila.get("Consumo") or "").strip(),
+            "categoria": str(fila.get("Categoría") or "").strip(),
+            "archivo": str(fila.get("Archivo") or "").strip(),
+            "estado": str(fila.get("Estado") or "").strip(),
+            "observacion": str(fila.get("Observación") or "").strip(),
+            "confianza": int(fila.get("Confianza") or 0),
+        }
+
+        if not registro["numero_factura"] or not registro["ruc_emisor"]:
+            errores.append(
+                f"{registro['archivo']}: falta factura o RUC emisor."
+            )
+            continue
+
+        try:
+            cliente.table("facturas").insert(registro).execute()
+            guardadas += 1
+        except Exception as error:
+            mensaje = str(error).lower()
+            if "duplicate" in mensaje or "unique" in mensaje or "23505" in mensaje:
+                duplicadas += 1
+            else:
+                errores.append(f"{registro['archivo']}: {error}")
+                continue
+
+        if indice not in df_original.index:
+            continue
+
+        original = df_original.loc[indice]
+        ruc = registro["ruc_emisor"]
+
+        for campo in ["Proveedor", "Categoría", "Consumo"]:
+            detectado = str(original.get(campo) or "").strip()
+            corregido = str(fila.get(campo) or "").strip()
+
+            if corregido and corregido != detectado:
+                correccion = {
+                    "ruc_emisor": ruc,
+                    "campo": campo,
+                    "valor_detectado": detectado,
+                    "valor_corregido": corregido,
+                }
+
+                try:
+                    cliente.table("correcciones").insert(correccion).execute()
+                except Exception:
+                    pass
+
+    return guardadas, duplicadas, errores
 
 
 # =========================================================
@@ -696,6 +882,30 @@ def crear_excel(df: pd.DataFrame) -> bytes:
 
 
 # =========================================================
+# DATOS COMPARTIDOS
+# =========================================================
+supabase = obtener_supabase()
+proyectos = cargar_proyectos(supabase)
+proyectos_por_nombre = {
+    proyecto["nombre"]: proyecto["id"]
+    for proyecto in proyectos
+}
+nombres_proyectos = list(proyectos_por_nombre.keys())
+memoria_correcciones = cargar_memoria(supabase)
+
+if supabase is None:
+    st.warning(
+        "La app funciona para extraer y descargar Excel, "
+        "pero no pudo conectarse a Supabase."
+    )
+elif not nombres_proyectos:
+    st.warning(
+        "La conexión a Supabase funciona, pero no se encontraron "
+        "proyectos activos."
+    )
+
+
+# =========================================================
 # ENCABEZADO
 # =========================================================
 col_logo, col_titulo = st.columns(
@@ -765,13 +975,21 @@ if archivos:
             else:
                 texto, bloques = leer_imagen(archivo)
 
-            resultados.append(
-                extraer_datos(
-                    texto,
-                    bloques,
-                    archivo.name,
-                )
+            datos_extraidos = extraer_datos(
+                texto,
+                bloques,
+                archivo.name,
             )
+
+            datos_extraidos = aplicar_memoria(
+                datos_extraidos,
+                memoria_correcciones,
+            )
+
+            if nombres_proyectos and not datos_extraidos.get("Proyecto"):
+                datos_extraidos["Proyecto"] = nombres_proyectos[0]
+
+            resultados.append(datos_extraidos)
 
         except Exception as error:
             resultados.append(
@@ -805,6 +1023,7 @@ if archivos:
 
     df = pd.DataFrame(resultados)
     df = marcar_duplicados(df)
+    df_original = df.copy(deep=True)
 
     cantidad_ok = int((df["Estado"] == "OK").sum())
     cantidad_revisar = int((df["Estado"] == "REVISAR").sum())
@@ -894,6 +1113,12 @@ if archivos:
             "Archivo": st.column_config.TextColumn(width="large"),
             "Factura": st.column_config.TextColumn(width="medium"),
             "Proveedor": st.column_config.TextColumn(width="large"),
+            "Proyecto": st.column_config.SelectboxColumn(
+                "Proyecto",
+                options=nombres_proyectos,
+                required=True,
+                width="medium",
+            ),
             "Observación": st.column_config.TextColumn(width="large"),
         },
     )
@@ -904,12 +1129,61 @@ if archivos:
         + ".xlsx"
     )
 
-    st.download_button(
-        "📥 Descargar Excel",
-        data=crear_excel(df_editado),
-        file_name=nombre_excel,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    columna_descarga, columna_guardar = st.columns([1, 1])
+
+    with columna_descarga:
+        st.download_button(
+            "📥 Descargar Excel",
+            data=crear_excel(df_editado),
+            file_name=nombre_excel,
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+        )
+
+    with columna_guardar:
+        guardar = st.button(
+            "💾 Guardar en base de datos",
+            type="primary",
+            use_container_width=True,
+            disabled=(
+                supabase is None
+                or not nombres_proyectos
+            ),
+        )
+
+    if guardar:
+        with st.spinner("Guardando facturas y correcciones..."):
+            guardadas, duplicadas, errores_guardado = guardar_en_supabase(
+                supabase,
+                df_original,
+                df_editado,
+                proyectos_por_nombre,
+            )
+
+        if guardadas:
+            st.success(
+                f"Se guardaron {guardadas} factura(s) correctamente."
+            )
+
+        if duplicadas:
+            st.warning(
+                f"{duplicadas} factura(s) ya existían y no se duplicaron."
+            )
+
+        if errores_guardado:
+            st.error(
+                "No se guardaron algunos registros:\n\n"
+                + "\n".join(f"- {error}" for error in errores_guardado)
+            )
+
+        if guardadas and not errores_guardado:
+            st.info(
+                "Las correcciones de Proveedor, Categoría y Consumo "
+                "quedaron guardadas para futuras facturas del mismo RUC."
+            )
 
     with st.expander("👁️ Vista previa de los documentos", expanded=False):
         archivo_vista = st.selectbox(
