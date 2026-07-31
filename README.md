@@ -1,14 +1,24 @@
 # Automatizador de Facturas - Solar Team
 
-Versión con:
-- Extracción de PDF e imágenes.
-- Excel profesional.
-- Proyectos cargados desde Supabase.
-- Guardado compartido de facturas.
-- Detección de duplicados por RUC + número de factura.
-- Memoria de Proveedor, Categoría y Consumo por RUC.
+Cambios de esta versión:
+- El proyecto es opcional.
+- El usuario puede escribir un proyecto nuevo directamente.
+- Los proyectos nuevos se crean automáticamente en Supabase.
+- Las facturas también pueden guardarse sin proyecto.
+- El logo se muestra con ancho fijo para evitar recortes o deformaciones.
+- Se mantiene el aprendizaje de Proveedor, Categoría y Consumo por RUC.
 
-Antes de publicar:
-1. Agrega `supabase` a requirements.txt.
-2. Configura `SUPABASE_URL` y `SUPABASE_KEY` en Streamlit Secrets.
-3. Permite SELECT en `proyectos` y `correcciones`, e INSERT en `facturas` y `correcciones`.
+Antes de usar la creación automática de proyectos, ejecuta en Supabase:
+
+```sql
+grant insert on table public.proyectos to anon;
+
+drop policy if exists "anon crea proyectos"
+on public.proyectos;
+
+create policy "anon crea proyectos"
+on public.proyectos
+for insert
+to anon
+with check (true);
+```

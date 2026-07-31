@@ -71,6 +71,49 @@ def cargar_proyectos(cliente: Client | None) -> list[dict]:
         return []
 
 
+def obtener_o_crear_proyecto(
+    cliente: Client,
+    nombre_proyecto: str,
+) -> int | None:
+    nombre_limpio = re.sub(
+        r"\s+",
+        " ",
+        str(nombre_proyecto or "").strip(),
+    )
+
+    if not nombre_limpio:
+        return None
+
+    try:
+        respuesta = (
+            cliente.table("proyectos")
+            .select("id,nombre")
+            .ilike("nombre", nombre_limpio)
+            .limit(1)
+            .execute()
+        )
+
+        if respuesta.data:
+            return int(respuesta.data[0]["id"])
+
+        nueva_respuesta = (
+            cliente.table("proyectos")
+            .insert({
+                "nombre": nombre_limpio,
+                "estado": "Activo",
+            })
+            .execute()
+        )
+
+        if nueva_respuesta.data:
+            return int(nueva_respuesta.data[0]["id"])
+
+    except Exception:
+        return None
+
+    return None
+
+
 def cargar_memoria(cliente: Client | None) -> dict:
     """
     Recupera las correcciones más recientes por RUC y campo.
@@ -148,21 +191,32 @@ def guardar_en_supabase(
     cliente: Client,
     df_original: pd.DataFrame,
     df_editado: pd.DataFrame,
-    proyectos_por_nombre: dict,
 ) -> tuple[int, int, list[str]]:
     guardadas = 0
     duplicadas = 0
     errores = []
 
     for indice, fila in df_editado.iterrows():
-        proyecto_nombre = str(fila.get("Proyecto") or "").strip()
-        proyecto_id = proyectos_por_nombre.get(proyecto_nombre)
+        proyecto_nombre = re.sub(
+            r"\s+",
+            " ",
+            str(fila.get("Proyecto") or "").strip(),
+        )
 
-        if not proyecto_id:
-            errores.append(
-                f"{fila.get('Archivo', 'Documento')}: selecciona un proyecto."
+        proyecto_id = None
+
+        if proyecto_nombre:
+            proyecto_id = obtener_o_crear_proyecto(
+                cliente,
+                proyecto_nombre,
             )
-            continue
+
+            if not proyecto_id:
+                errores.append(
+                    f"{fila.get('Archivo', 'Documento')}: "
+                    "no se pudo crear o encontrar el proyecto."
+                )
+                continue
 
         registro = {
             "fecha": convertir_fecha_bd(fila.get("Fecha")),
@@ -899,9 +953,9 @@ if supabase is None:
         "pero no pudo conectarse a Supabase."
     )
 elif not nombres_proyectos:
-    st.warning(
-        "La conexión a Supabase funciona, pero no se encontraron "
-        "proyectos activos."
+    st.info(
+        "Todavía no hay proyectos registrados. Puedes escribir un nombre "
+        "nuevo en la columna Proyecto o dejarla vacía."
     )
 
 
@@ -909,7 +963,7 @@ elif not nombres_proyectos:
 # ENCABEZADO
 # =========================================================
 col_logo, col_titulo = st.columns(
-    [1.2, 5.8],
+    [2.0, 5.0],
     vertical_alignment="center",
 )
 
@@ -922,8 +976,10 @@ with col_logo:
     if logo:
         st.image(
             str(logo),
-            use_container_width=True,
+            width=300,
         )
+    else:
+        st.caption("Logo no encontrado")
 
 with col_titulo:
     st.markdown(
@@ -985,9 +1041,6 @@ if archivos:
                 datos_extraidos,
                 memoria_correcciones,
             )
-
-            if nombres_proyectos and not datos_extraidos.get("Proyecto"):
-                datos_extraidos["Proyecto"] = nombres_proyectos[0]
 
             resultados.append(datos_extraidos)
 
@@ -1113,11 +1166,13 @@ if archivos:
             "Archivo": st.column_config.TextColumn(width="large"),
             "Factura": st.column_config.TextColumn(width="medium"),
             "Proveedor": st.column_config.TextColumn(width="large"),
-            "Proyecto": st.column_config.SelectboxColumn(
+            "Proyecto": st.column_config.TextColumn(
                 "Proyecto",
-                options=nombres_proyectos,
-                required=True,
                 width="medium",
+                help=(
+                    "Escribe el nombre del proyecto o déjalo vacío. "
+                    "Si es nuevo, se creará al guardar."
+                ),
             ),
             "Observación": st.column_config.TextColumn(width="large"),
         },
@@ -1148,10 +1203,7 @@ if archivos:
             "💾 Guardar en base de datos",
             type="primary",
             use_container_width=True,
-            disabled=(
-                supabase is None
-                or not nombres_proyectos
-            ),
+            disabled=(supabase is None),
         )
 
     if guardar:
@@ -1160,7 +1212,6 @@ if archivos:
                 supabase,
                 df_original,
                 df_editado,
-                proyectos_por_nombre,
             )
 
         if guardadas:
@@ -1181,8 +1232,8 @@ if archivos:
 
         if guardadas and not errores_guardado:
             st.info(
-                "Las correcciones de Proveedor, Categoría y Consumo "
-                "quedaron guardadas para futuras facturas del mismo RUC."
+                "Las facturas y las correcciones quedaron guardadas. "
+                "Los proyectos nuevos también se añadieron a la base."
             )
 
     with st.expander("👁️ Vista previa de los documentos", expanded=False):
