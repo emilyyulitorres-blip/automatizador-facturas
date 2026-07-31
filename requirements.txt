@@ -4,3 +4,4 @@ openpyxl
 pymupdf
 pillow
 pytesseract
+supabase
